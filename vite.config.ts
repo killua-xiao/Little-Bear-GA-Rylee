@@ -1,3 +1,10 @@
+/**
+ * @fileoverview vite.config.ts
+ * 
+ * Vite 构建配置。
+ * 包含 React 插件配置、开发服务器端口定义以及环境变量的注入规则。
+ */
+
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';

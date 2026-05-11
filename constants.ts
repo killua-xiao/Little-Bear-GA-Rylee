@@ -42,6 +42,14 @@ export const PLAYER_HEIGHT = 30;
 export const MAX_HEALTH = 3;    // 初始最大生命值
 export const REVIVE_COST = 1;   // 复活所需金币
 
+// --- 视觉特效配置 ---
+export const VISUALS = {
+    sunRayCount: 5,
+    sunRayColor: 'rgba(255, 255, 200, 0.08)',
+    vignetteStrength: 0.3,
+    chromaticAberration: 2, // 像素偏移量
+};
+
 // --- 颜色配置表 (Palette - Updated for Realism) ---
 export const COLORS = {
   // 背景色 (会被渐变替代，作为Fallback)
@@ -53,9 +61,9 @@ export const COLORS = {
   arcticBg: '#1E293B', // 修改为深色板岩蓝，防止隐藏关过亮
   
   // 地形
-  ground: '#65A30D', // 草地绿
-  groundTop: '#84CC16', // 草地亮面
-  groundDark: '#3F6212', // 泥土暗部
+  ground: '#4D7C0F', // 草地绿 (更深一点)
+  groundTop: '#65A30D', // 草地亮面
+  groundDark: '#365314', // 泥土暗部
   rock: '#475569',
   sand: '#D97706',
   sandWall: '#F59E0B',

@@ -1,20 +1,86 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 🐻 小熊大冒险 (Little Bear's Great Adventure)
 
-# Run and deploy your AI Studio app
+> 一款基于 React 和 HTML5 Canvas 纯原生开发的现代 2D 横版平台动作游戏，带你重温经典红白机时代的感动。
 
-This contains everything you need to run your app locally.
+![小熊大冒险](https://images.unsplash.com/photo-1542204165-65bf26472b9b?q=80&w=2574&auto=format&fit=crop)
 
-View your app in AI Studio: https://ai.studio/apps/drive/1RIO-tBtlmJSu6bDwnFSJ146yrH2KUS1k
+## 🌟 游戏简介 (Introduction)
 
-## Run Locally
+**《小熊大冒险》** 讲述了一只平凡的森林小熊，在获得神秘力量后被传送到各个平行宇宙，最终披荆斩棘回到家人身边的一段史诗旅程。
+你可以体验到经典的平台跳跃、极限闪避、战斗射击，以及与多样化怪物的斗智斗勇！
 
-**Prerequisites:**  Node.js
+本项目**不依赖任何第三方游戏引擎**（如 Phaser 或 Pixi.js），完全依靠 React 状态管理与原生的 `requestAnimationFrame` 及 Canvas API，从零构建了一套包含重力、碰撞检测、动画效果、粒子系统在内的 2D 物理与渲染引擎。
 
+---
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 🎮 特色功能 (Features)
+
+- **七大主题关卡，无尽挑战**
+  涵盖了森林、洞穴、暴风雨古堡、深海、古墓、飞驰列车、甚至宇宙太空！每个关卡都有独特的环境交互设定。
+- **纯手写的高性能 2D 物理引擎**
+  精心调校的"土狼时间 (Coyote Time)" 与 "按键预输入缓冲 (Jump Buffer)"，保证了手感丝滑。
+- **丰富的实体与敌人类型**
+  超过十几款各具特色的怪物：装甲怪、飞行蝙蝠、史莱姆、追踪幽灵、深海灯笼鱼，甚至是太空中随机掉落的陨石。
+- **隐藏剧情与彩蛋系统**
+  在主界面进入制作人员名单(Credits) 界面，输入隐秘指令可解锁终极隐藏剧情模式 999 关，揭示故事的真正结局。
+- **动态天候与环境视觉引擎**
+  具有基于屏幕坐标的粒子天气系统（风雪、暴雨）、光斑晕染渲染（Sun Rays）以及多层视差滚动背景。
+- **原生手柄(Gamepad) 支持**
+  接上你的 Xbox 或 PlayStation 手柄，感受最纯粹的主机游戏体验！
+
+---
+
+## 🚀 游玩操作 (How to Play)
+
+| 操作方式       | 键盘按键           | 手柄对应           |
+| :------------- | :----------------- | :----------------- |
+| **向左移动**   | `Left Arrow` / `A` | `D-pad Left` /摇杆 |
+| **向右移动**   | `Right Arrow` / `D`| `D-pad Right`/摇杆 |
+| **跳跃**       | `Up Arrow` / `Space`| `按钮 A (South)`   |
+| **射击 / 攻击**| `F` 键             | `按钮 X (West)`    |
+
+- **生命与复活:** 不小心阵亡？你可以花费收集到的金币进行原地满血复活！
+- **神秘力量 (酒)：** 吃到神秘药水后，你的移动速度、跳跃高度与攻击频率将大幅提升，且伴有特殊粒子残影效果！
+
+*提示: 在游戏通关后的 Credits 画面，依次输入键盘数字键 `20181018` 试试看会发生什么？*
+
+---
+
+## 💻 本地运行 (Development & Setup)
+
+本项目由 Vite + React19 + TypeScript 构建。
+
+### 环境要求
+- Node.js >= 20.x
+
+### 安装步骤
+1. 克隆 / 下载本项目。
+2. 安装依赖：
+   ```bash
+   npm install
+   ```
+3. 启动开发服务器：
+   ```bash
+   npm run dev
+   ```
+4. 在浏览器中打开提示的本地地址 (通常为 `http://localhost:3000`) 即可体验游戏。
+
+---
+
+## 🛠️ 技术栈 (Tech Stack)
+
+- **框架**: `React 19` (Hooks 用于游戏生命周期管控和 UI Overlay)
+- **开发语言**: `TypeScript`
+- **渲染基建**: `HTML5 Canvas 2D API`
+- **样式**: `Tailwind CSS 3` (用于游戏外的菜单和 UI 排版)
+- **图标**: `lucide-react`
+- **构建工具**: `Vite`
+
+> 详细的技术架构与引擎实现细节，请参阅 [`docs/TECHNICAL.md`](./docs/TECHNICAL.md)。
+
+---
+
+## 💖 鸣谢 (Credits)
+- **开发者**: Gemini AI (由右右小朋友启发)
+- **字体**: "Press Start 2P" 与 "Nunito" 呈现完美的复古像素与现代表现感。
+- **设计理念**: 致敬横版黄金时代，感谢所有热爱游戏的心。

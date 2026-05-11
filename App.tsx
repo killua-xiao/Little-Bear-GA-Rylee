@@ -1,4 +1,13 @@
 
+/**
+ * @fileoverview App.tsx
+ * 
+ * 游戏的主要应用入口与 UI 叠加层控制器。
+ * 负责管理整个游戏的全局状态生命周期 (MainMenu -> Cinematic -> Playing -> GameOver 等)，
+ * 并按需加载底层的 GameCanvas 渲染引擎引擎。在这个层级并不处理任何 Canvas 的物理模拟计算，
+ * 仅负责 React 侧的 HUD 渲染、关卡路由以及得分与隐藏秘籍的监听。
+ */
+
 import React, { useState, useEffect } from 'react';
 import { GameCanvas } from './components/GameCanvas';
 import { GameStatus, GameState } from './types';
@@ -7,6 +16,9 @@ import { Heart, Coins, Trophy, Skull, Star, Trees, Zap, Sparkles, Crown, Mountai
 import { MAX_HEALTH, REVIVE_COST } from './constants';
 import { audio } from './audio';
 
+/**
+ * 初始化游戏状态，用于启动及重置
+ */
 const INITIAL_STATE: GameState = {
   status: GameStatus.MENU,
   currentLevelId: 1,
@@ -17,12 +29,15 @@ const INITIAL_STATE: GameState = {
 };
 
 // --- CINEMATIC COMPONENT ---
+/**
+ * 代表一个过场动画场景的结构
+ */
 interface Scene {
   text: string;
   subText?: string;
   icon: React.ReactNode;
   bgColor: string;
-  duration: number; // ms
+  duration: number; // 持续时间，单位毫秒 (ms)
 }
 
 const INTRO_SCENES: Scene[] = [
@@ -104,6 +119,10 @@ const HIDDEN_OUTRO_SCENES: Scene[] = [
     }
   ];
 
+/**
+ * 剧情动画过场视图组件 (CinematicView)
+ * 遍历并序列化地播放给定的 Scene 集合。支持用户通过点击屏幕或等待定时器跳过。
+ */
 const CinematicView: React.FC<{ scenes: Scene[], onComplete: () => void }> = ({ scenes, onComplete }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [fadeIn, setFadeIn] = useState(true);
@@ -155,6 +174,10 @@ const CinematicView: React.FC<{ scenes: Scene[], onComplete: () => void }> = ({ 
 
 // --- MAIN APP ---
 
+/**
+ * 游戏根组件
+ * 包含所有视图状态机以及顶部 HUD / UI。
+ */
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(INITIAL_STATE);
   const [highScore, setHighScore] = useState(0);

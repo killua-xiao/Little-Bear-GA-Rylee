@@ -5,7 +5,7 @@ import {
   MOVE_SPEED, JUMP_FORCE, TERMINAL_VELOCITY, PROJECTILE_SPEED, PROJECTILE_SIZE, SHOOT_COOLDOWN, 
   WINE_DURATION, WINE_SPEED_MULTIPLIER, WINE_JUMP_MULTIPLIER,
   ACCELERATION, FRICTION, AIR_FRICTION, COYOTE_TIME, JUMP_BUFFER,
-  SWIM_SPEED, WATER_FRICTION, MELEE_RANGE, MELEE_DURATION, MELEE_COOLDOWN
+  SWIM_SPEED, WATER_FRICTION, MELEE_RANGE, MELEE_DURATION, MELEE_COOLDOWN, VISUALS
 } from '../constants';
 import { Entity, Player, EntityType, GameStatus, GameState, EnemyVariant } from '../types';
 import { levels } from '../levels';
@@ -31,6 +31,7 @@ interface Planet {
     speed: number; 
 }
 interface CaveSpike { x: number; height: number; type: 'CEILING' | 'FLOOR'; width: number; }
+interface SunRay { x: number; width: number; angle: number; speed: number; alpha: number; }
 
 // --- 对象池优化：粒子系统 ---
 interface Particle { 
@@ -41,10 +42,15 @@ interface Particle {
 }
 const MAX_PARTICLES = 300;
 
+// 运动轨迹 (Motion Trail)
+interface Trail {
+    x: number; y: number; facingRight: boolean; alpha: number; type: 'BEAR' | 'DASH';
+}
+
 export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setGameState, onLevelComplete, onPlayerHit, onGameOver }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null); // 离屏背景画布
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null); // 离屏光照画布
+  const lightingCanvasRef = useRef<HTMLCanvasElement | null>(null); // 光照层
   const requestRef = useRef<number>(0);
   
   // --- 游戏状态 Refs ---
@@ -87,12 +93,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
           active: false, x: 0, y: 0, speedX: 0, speedY: 0, size: 0, life: 0 
       }))
   );
-
-  // --- 环境与装饰 Refs ---
+  
+  // --- 视觉特效 Refs ---
+  const trailsRef = useRef<Trail[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
   const treesRef = useRef<Tree[]>([]);
   const planetsRef = useRef<Planet[]>([]);
   const caveSpikesRef = useRef<CaveSpike[]>([]); 
+  const sunRaysRef = useRef<SunRay[]>([]);
 
   // --- 粒子系统方法 ---
   const spawnParticle = (opts: Partial<Omit<Particle, 'active'>>) => {
@@ -208,7 +216,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
         });
     }
 
+    sunRaysRef.current = Array.from({ length: VISUALS.sunRayCount }).map(() => ({
+        x: Math.random() * CANVAS_WIDTH,
+        width: 50 + Math.random() * 100,
+        angle: Math.PI / 4,
+        speed: 0.2 + Math.random() * 0.3,
+        alpha: 0.1 + Math.random() * 0.2
+    }));
+
     particlePoolRef.current.forEach(p => p.active = false);
+    trailsRef.current = [];
   }, []);
 
   // --- 性能优化：生成离屏背景画布 & 光照画布 ---
@@ -226,13 +243,15 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     const isArcticLevel = weather === 'ARCTIC';
 
     let bgGradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
-    if (isSpaceLevel || weather === 'CAVE' || isTrainLevel) {
+    
+    if (isSpaceLevel || weather === 'CAVE') {
         bgGradient.addColorStop(0, '#000000');
         bgGradient.addColorStop(1, '#111827');
     } else if (isSeaLevel) {
         bgGradient.addColorStop(0, '#0C4A6E'); 
         bgGradient.addColorStop(1, '#0284C7'); 
-    } else if (weather === 'SUNNY') {
+    } else if (weather === 'SUNNY' || isTrainLevel) { 
+        // Train level uses Sunny sky
         bgGradient.addColorStop(0, '#38BDF8'); 
         bgGradient.addColorStop(1, '#BAE6FD'); 
     } else if (weather === 'RAIN') {
@@ -249,7 +268,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     ctx.fillStyle = bgGradient;
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     
-    if (!isSpaceLevel && !isSeaLevel && weather !== 'CAVE' && weather !== 'TRAIN') {
+    if (!isSpaceLevel && !isSeaLevel && weather !== 'CAVE' && !isTrainLevel) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.beginPath();
         ctx.moveTo(0, CANVAS_HEIGHT);
@@ -263,10 +282,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     bgCanvasRef.current = bg;
     
     // 初始化光照画布
-    const ov = document.createElement('canvas');
-    ov.width = CANVAS_WIDTH;
-    ov.height = CANVAS_HEIGHT;
-    overlayCanvasRef.current = ov;
+    const lighting = document.createElement('canvas');
+    lighting.width = CANVAS_WIDTH;
+    lighting.height = CANVAS_HEIGHT;
+    lightingCanvasRef.current = lighting;
   }, [levelId]); 
 
   // --- 关卡切换逻辑 ---
@@ -301,6 +320,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     cameraRef.current.shake = 0;
     cameraRef.current.lookAheadOffset = 0;
     particlePoolRef.current.forEach(p => p.active = false);
+    trailsRef.current = [];
     timeRef.current = 0;
     
     let bgmType: 'NORMAL' | 'CAVE' | 'TOMB' | 'SPACE' | 'CREDITS' | 'WARM' = 'NORMAL';
@@ -481,6 +501,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     const weather = levelRef.current.weather;
     timeRef.current += 1;
 
+    // 0. Sun Rays Logic
+    sunRaysRef.current.forEach(ray => {
+        ray.x -= ray.speed;
+        if (ray.x + ray.width < -100) {
+            ray.x = CANVAS_WIDTH + 100 + Math.random() * 200;
+        }
+    });
+
     // 1. 动态背景元素
     if (weather === 'TRAIN') {
         const trainSpeed = 6; 
@@ -612,6 +640,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
            p.active = false;
         }
     });
+
+    // Update trails
+    trailsRef.current.forEach(t => t.alpha -= 0.1);
+    trailsRef.current = trailsRef.current.filter(t => t.alpha > 0);
   };
 
   // --- 主更新循环 (Logic Loop) ---
@@ -637,6 +669,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     const isArcticLevel = weather === 'ARCTIC';
     const isHiddenLevel = levelId === 999;
 
+    // Motion Trail Generation
+    if (Math.abs(player.vel.x) > 4 || Math.abs(player.vel.y) > 4) {
+        if (timeRef.current % 3 === 0) {
+            trailsRef.current.push({
+                x: player.pos.x,
+                y: player.pos.y,
+                facingRight: player.facingRight,
+                alpha: 0.5,
+                type: 'BEAR'
+            });
+        }
+    }
+
     // 动画更新
     if (player.isGrounded) {
         if (Math.abs(player.vel.x) > 0.1) {
@@ -646,6 +691,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
                 player.animFrame = (player.animFrame === 1) ? 2 : 1;
             }
         } else {
+            // Idle breathing animation
+            player.renderScale.y = 1 + Math.sin(timeRef.current / 20) * 0.02;
+            player.renderScale.x = 1 + Math.cos(timeRef.current / 20) * 0.02;
             player.animFrame = 0;
         }
     } else {
@@ -1107,7 +1155,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     const isLevel7 = levelId === 7; // Space + Laser
     const isHiddenLevel = levelId === 999;
 
-    // === 1. 绘制背景 (Background) - 使用离屏 Canvas 优化 ===
+    // === 1. 绘制背景 (Background) ===
     if (bgCanvasRef.current) {
         ctx.drawImage(bgCanvasRef.current, 0, 0);
     } else {
@@ -1119,6 +1167,26 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     const shakeY = (Math.random() - 0.5) * cameraRef.current.shake;
 
     // === 2. 绘制动态远景 (Parallax) ===
+    
+    // Sun Rays (Atmospheric)
+    if (weather === 'SUNNY' || weather === 'ARCTIC' || isTrainLevel) { // Added train level for sun rays
+        ctx.save();
+        sunRaysRef.current.forEach(ray => {
+            const gradient = ctx.createLinearGradient(ray.x, 0, ray.x - Math.tan(ray.angle) * CANVAS_HEIGHT, CANVAS_HEIGHT);
+            gradient.addColorStop(0, VISUALS.sunRayColor);
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(ray.x, 0);
+            ctx.lineTo(ray.x + ray.width, 0);
+            ctx.lineTo(ray.x + ray.width - Math.tan(ray.angle) * CANVAS_HEIGHT, CANVAS_HEIGHT);
+            ctx.lineTo(ray.x - Math.tan(ray.angle) * CANVAS_HEIGHT, CANVAS_HEIGHT);
+            ctx.fill();
+        });
+        ctx.restore();
+    }
+
     if (isSpaceLevel) {
         ctx.fillStyle = '#FFF';
         for (let i = 0; i < 50; i++) { 
@@ -1230,7 +1298,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     entitiesRef.current.forEach(ent => {
       if (ent.isDead) return;
       if (ent.type === EntityType.SPAWNER) return;
-      // 修复：剔除检测逻辑修复
+      
       const entRight = ent.pos.x + ent.size.x;
       if (entRight < cameraX - 200 || ent.pos.x > cameraX + CANVAS_WIDTH + 200) return;
 
@@ -1288,42 +1356,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
                  const earthX = ent.pos.x + 200; 
                  const earthY = CANVAS_HEIGHT/2; 
                  const radius = 300;
-                 // Atmosphere glow
                  ctx.shadowBlur = 50; 
                  ctx.shadowColor = '#60A5FA'; 
-                 
-                 // Ocean
-                 ctx.fillStyle = '#1E3A8A'; 
-                 ctx.beginPath(); 
-                 ctx.arc(earthX, earthY, radius, 0, Math.PI*2); 
-                 ctx.fill();
-                 
-                 // Ice cap
-                 ctx.fillStyle = '#F8FAFC'; 
-                 ctx.beginPath(); 
-                 ctx.ellipse(earthX, earthY - 200, 220, 80, 0, 0, Math.PI*2); 
-                 ctx.fill();
-                 
-                 // Landmasses
-                 ctx.fillStyle = '#15803D'; 
-                 ctx.beginPath(); 
-                 ctx.arc(earthX - 100, earthY + 50, 60, 0, Math.PI*2); 
-                 ctx.fill(); 
-                 ctx.beginPath(); 
-                 ctx.arc(earthX + 150, earthY + 100, 80, 0, Math.PI*2); 
-                 ctx.fill();
-                 
-                 // Atmosphere stroke
-                 ctx.lineWidth = 5;
-                 ctx.strokeStyle = '#93C5FD';
-                 ctx.beginPath(); 
-                 ctx.arc(earthX, earthY, radius, 0, Math.PI*2); 
-                 ctx.stroke(); 
-                 
+                 ctx.fillStyle = '#1E3A8A'; ctx.beginPath(); ctx.arc(earthX, earthY, radius, 0, Math.PI*2); ctx.fill();
+                 ctx.fillStyle = '#F8FAFC'; ctx.beginPath(); ctx.ellipse(earthX, earthY - 200, 220, 80, 0, 0, Math.PI*2); ctx.fill();
+                 ctx.fillStyle = '#15803D'; ctx.beginPath(); ctx.arc(earthX - 100, earthY + 50, 60, 0, Math.PI*2); ctx.fill(); 
+                 ctx.beginPath(); ctx.arc(earthX + 150, earthY + 100, 80, 0, Math.PI*2); ctx.fill();
+                 ctx.lineWidth = 5; ctx.strokeStyle = '#93C5FD'; ctx.beginPath(); ctx.arc(earthX, earthY, radius, 0, Math.PI*2); ctx.stroke(); 
                  ctx.shadowBlur = 0;
                  return;
              }
-             
              ctx.fillStyle = '#111827'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
              return; 
         }
@@ -1345,46 +1387,66 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
             ctx.fillStyle = COLORS.trainCarStripe; ctx.fillRect(ent.pos.x, ent.pos.y + 30, ent.size.x, 10);
             const wheelY = ent.pos.y + ent.size.y; 
             ctx.fillStyle = '#334155'; ctx.fillRect(ent.pos.x + 25, wheelY, 40, 5); ctx.fillRect(ent.pos.x + ent.size.x - 65, wheelY, 40, 5);
-            
-            // Draw Windows
             ctx.fillStyle = COLORS.trainWindow;
             for(let i = 10; i < ent.size.x - 30; i += 50) {
                 ctx.fillRect(ent.pos.x + i, ent.pos.y + 10, 30, 15);
             }
-
         } else {
+            // PROCEDURAL TERRAIN RENDERING
+            // Base
             ctx.fillStyle = levelRef.current.groundColor || COLORS.groundDark;
             ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
+            
+            // Stone/Dirt Texture (Noise)
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            const seed = ent.pos.x; // Deterministic random based on position
+            for(let i = 0; i < ent.size.x; i+= 15) {
+                for(let j=10; j < ent.size.y; j+= 15) {
+                     if (((seed + i * j) % 7) > 3) {
+                         ctx.fillRect(ent.pos.x + i, ent.pos.y + j, 6, 6);
+                     }
+                }
+            }
+
+            // Top Layer (Grass/Ice)
             if (ent.size.y > 10) {
-               ctx.fillStyle = levelRef.current.groundColor ? (levelRef.current.groundColor === COLORS.ice ? '#D6F2FE' : '#65A30D') : COLORS.dirt;
-               if (!levelRef.current.groundColor) ctx.fillStyle = COLORS.ground;
+               const topColor = levelRef.current.groundColor ? (levelRef.current.groundColor === COLORS.ice ? '#D6F2FE' : '#65A30D') : COLORS.dirt;
+               ctx.fillStyle = !levelRef.current.groundColor ? COLORS.groundTop : topColor;
                ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, 10);
+
+               // Procedural Grass Blades
+               if (!levelRef.current.groundColor || levelRef.current.groundColor === COLORS.ground) {
+                   ctx.fillStyle = COLORS.groundTop;
+                   for(let g = 0; g < ent.size.x; g += 8) {
+                       const h = 4 + ((g + ent.pos.x) % 5); 
+                       ctx.fillRect(ent.pos.x + g, ent.pos.y - h, 4, h);
+                   }
+               }
             }
         }
       } 
       else if (ent.type === EntityType.BREAKABLE_WALL) {
           ctx.fillStyle = COLORS.sandWall; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
           ctx.strokeStyle = '#B45309'; ctx.lineWidth = 2; ctx.strokeRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
+          // Texture
+          ctx.fillStyle = '#B45309';
+          ctx.beginPath();
+          ctx.moveTo(ent.pos.x + 10, ent.pos.y + 10); ctx.lineTo(ent.pos.x + ent.size.x - 10, ent.pos.y + ent.size.y - 10);
+          ctx.moveTo(ent.pos.x + ent.size.x - 10, ent.pos.y + 10); ctx.lineTo(ent.pos.x + 10, ent.pos.y + ent.size.y - 10);
+          ctx.stroke();
       }
       else if (ent.type === EntityType.COIN) {
-        // Glow effect
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = COLORS.coinShine;
+        ctx.shadowBlur = 10; ctx.shadowColor = COLORS.coinShine;
         ctx.fillStyle = COLORS.coin; ctx.beginPath(); ctx.arc(ent.pos.x + ent.size.x/2, ent.pos.y + ent.size.y/2, ent.size.x/2, 0, Math.PI * 2); ctx.fill();
         ctx.shadowBlur = 0;
       }
       else if (ent.type === EntityType.CHECKPOINT) {
-          ctx.fillStyle = '#9CA3AF';
-          ctx.fillRect(ent.pos.x + 5, ent.pos.y, 4, 40);
+          ctx.fillStyle = '#9CA3AF'; ctx.fillRect(ent.pos.x + 5, ent.pos.y, 4, 40);
           ctx.fillStyle = ent.isChecked ? '#10B981' : '#EF4444'; 
-          ctx.beginPath();
-          ctx.moveTo(ent.pos.x + 9, ent.pos.y + 2);
-          ctx.lineTo(ent.pos.x + 35, ent.pos.y + 10);
-          ctx.lineTo(ent.pos.x + 9, ent.pos.y + 18);
-          ctx.fill();
-          if (ent.isChecked) {
-              ctx.strokeStyle = '#FFF'; ctx.lineWidth = 2; ctx.stroke();
-          }
+          ctx.shadowBlur = ent.isChecked ? 15 : 0; ctx.shadowColor = ent.isChecked ? '#10B981' : 'transparent';
+          ctx.beginPath(); ctx.moveTo(ent.pos.x + 9, ent.pos.y + 2); ctx.lineTo(ent.pos.x + 35, ent.pos.y + 10); ctx.lineTo(ent.pos.x + 9, ent.pos.y + 18); ctx.fill();
+          if (ent.isChecked) { ctx.strokeStyle = '#FFF'; ctx.lineWidth = 2; ctx.stroke(); }
+          ctx.shadowBlur = 0;
       }
       else if (ent.type === EntityType.WINE) {
         ctx.fillStyle = COLORS.wine; ctx.fillRect(ent.pos.x + 4, ent.pos.y + 10, 12, 20); ctx.fillRect(ent.pos.x + 7, ent.pos.y, 6, 10);
@@ -1401,38 +1463,18 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
       }
       else if (ent.type === EntityType.TROPHY) {
          if (ent.id === 'home_trigger') {
-             // 绘制温馨小屋
-             const hx = ent.pos.x + 10;
-             const hy = ent.pos.y + 40;
-             // House Body
-             ctx.fillStyle = '#78350F'; // Dark Wood
-             ctx.fillRect(hx, hy, 80, 60);
-             // Roof
-             ctx.fillStyle = '#991B1B'; // Red Roof
-             ctx.beginPath(); ctx.moveTo(hx - 10, hy); ctx.lineTo(hx + 40, hy - 40); ctx.lineTo(hx + 90, hy); ctx.fill();
-             // Door
-             ctx.fillStyle = '#D97706'; // Wood door
-             ctx.fillRect(hx + 30, hy + 20, 20, 40);
-             ctx.fillStyle = '#F59E0B'; // Knob
-             ctx.beginPath(); ctx.arc(hx + 45, hy + 40, 2, 0, Math.PI*2); ctx.fill();
-             // Window with warm light
-             ctx.fillStyle = '#FDE047'; // Light
-             ctx.fillRect(hx + 10, hy + 10, 15, 15);
-             ctx.fillRect(hx + 55, hy + 10, 15, 15);
-             // Chimney smoke
+             const hx = ent.pos.x + 10; const hy = ent.pos.y + 40;
+             ctx.fillStyle = '#78350F'; ctx.fillRect(hx, hy, 80, 60);
+             ctx.fillStyle = '#991B1B'; ctx.beginPath(); ctx.moveTo(hx - 10, hy); ctx.lineTo(hx + 40, hy - 40); ctx.lineTo(hx + 90, hy); ctx.fill();
+             ctx.fillStyle = '#D97706'; ctx.fillRect(hx + 30, hy + 20, 20, 40);
+             ctx.fillStyle = '#F59E0B'; ctx.beginPath(); ctx.arc(hx + 45, hy + 40, 2, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#FDE047'; ctx.fillRect(hx + 10, hy + 10, 15, 15); ctx.fillRect(hx + 55, hy + 10, 15, 15);
              const smokeY = hy - 50 - (Date.now() % 1000) / 20;
-             ctx.fillStyle = 'rgba(255,255,255,0.5)';
-             ctx.beginPath(); ctx.arc(hx + 60, smokeY, 5 + Math.sin(Date.now()/200)*2, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(hx + 60, smokeY, 5 + Math.sin(Date.now()/200)*2, 0, Math.PI*2); ctx.fill();
          } else {
-             // Draw Podium
-             ctx.fillStyle = '#5D4037'; // Dark wood
-             ctx.fillRect(ent.pos.x, ent.pos.y + 30, 40, 10);
-             ctx.fillStyle = '#8D6E63'; // Lighter wood top
-             ctx.fillRect(ent.pos.x - 5, ent.pos.y + 25, 50, 5);
-
-             // Normal Trophy with Glow
-             ctx.shadowBlur = 15;
-             ctx.shadowColor = '#FDE047';
+             ctx.fillStyle = '#5D4037'; ctx.fillRect(ent.pos.x, ent.pos.y + 30, 40, 10);
+             ctx.fillStyle = '#8D6E63'; ctx.fillRect(ent.pos.x - 5, ent.pos.y + 25, 50, 5);
+             ctx.shadowBlur = 15; ctx.shadowColor = '#FDE047';
              ctx.fillStyle = COLORS.trophy; ctx.beginPath(); ctx.moveTo(ent.pos.x + 5, ent.pos.y + 5); ctx.lineTo(ent.pos.x + 35, ent.pos.y + 5); ctx.bezierCurveTo(ent.pos.x + 35, ent.pos.y + 25, ent.pos.x + 5, ent.pos.y + 25, ent.pos.x + 5, ent.pos.y + 5); ctx.fill();
              ctx.fillStyle = COLORS.trophyBase; ctx.fillRect(ent.pos.x + 15, ent.pos.y + 25, 10, 5); ctx.fillRect(ent.pos.x + 10, ent.pos.y + 30, 20, 5);
              ctx.shadowBlur = 0;
@@ -1444,305 +1486,154 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
          const time = Date.now();
 
          if (ent.enemyVariant && ent.enemyVariant.startsWith('FAMILY')) {
-             // 绘制家人 (45度侧身小熊形象)
-             // 检测移动方向：如果正在跟随 (vel.x !== 0)，朝向移动方向；否则默认朝左看小熊
              const isMovingRight = ent.vel.x > 0.1;
              const isMovingLeft = ent.vel.x < -0.1;
-             const isFacingLeft = isMovingLeft || (!isMovingRight && true); // 默认朝左
+             const isFacingLeft = isMovingLeft || (!isMovingRight && true); 
              
              ctx.save();
-             // 如果朝右，翻转画布
              if (!isFacingLeft) {
-                 ctx.translate(ent.pos.x + ent.size.x, ent.pos.y);
-                 ctx.scale(-1, 1);
-                 ctx.translate(-(ent.pos.x + ent.size.x), -ent.pos.y);
+                 ctx.translate(ent.pos.x + ent.size.x, ent.pos.y); ctx.scale(-1, 1); ctx.translate(-(ent.pos.x + ent.size.x), -ent.pos.y);
              }
-
-             // Draw Family Member (Standard visual logic assumes Left Facing now)
-             // Because we handle flipping via transform, we draw as if facing left.
-             // But wait, the original drawing code was hardcoded for "Left Facing".
-             // Let's adapt the previous drawing code to be generic and let transform handle flip.
-             
-             // Adjusted X coordinates for local space (relative to pos.x)
-             // Face is on the Left side of the body
-             
              ctx.fillStyle = COLORS.bear;
-             // Body
              ctx.beginPath(); ctx.roundRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y, 6); ctx.fill();
-             
-             // Ears
-             ctx.beginPath();
-             ctx.arc(ent.pos.x + 4, ent.pos.y + 2, 5, 0, Math.PI * 2); 
-             ctx.arc(ent.pos.x + ent.size.x - 4, ent.pos.y + 2, 5, 0, Math.PI * 2); 
-             ctx.fill();
-             
-             // Face (On Left)
+             ctx.beginPath(); ctx.arc(ent.pos.x + 4, ent.pos.y + 2, 5, 0, Math.PI * 2); ctx.arc(ent.pos.x + ent.size.x - 4, ent.pos.y + 2, 5, 0, Math.PI * 2); ctx.fill();
              ctx.fillStyle = COLORS.bearFace;
-             const faceWidth = ent.size.x * 0.55;
-             const faceHeight = ent.size.y * 0.4;
-             const faceX = ent.pos.x + 2; 
-             const faceY = ent.pos.y + ent.size.y * 0.25;
+             const faceWidth = ent.size.x * 0.55; const faceHeight = ent.size.y * 0.4; const faceX = ent.pos.x + 2; const faceY = ent.pos.y + ent.size.y * 0.25;
              ctx.beginPath(); ctx.roundRect(faceX, faceY, faceWidth, faceHeight, 4); ctx.fill();
-             
-             // Eyes
-             ctx.fillStyle = '#000';
-             const eyeY = faceY + faceHeight * 0.4;
-             const eyeSize = Math.max(1.5, ent.size.x * 0.08); 
-             ctx.beginPath(); ctx.arc(faceX + 4, eyeY, eyeSize, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(faceX + faceWidth - 4, eyeY, eyeSize, 0, Math.PI*2); ctx.fill();
-             
-             // Nose
-             ctx.beginPath();
-             ctx.ellipse(faceX + faceWidth/2 - 2, eyeY + 4, eyeSize, eyeSize*0.6, 0, 0, Math.PI*2);
-             ctx.fill();
+             ctx.fillStyle = '#000'; const eyeY = faceY + faceHeight * 0.4; const eyeSize = Math.max(1.5, ent.size.x * 0.08); 
+             ctx.beginPath(); ctx.arc(faceX + 4, eyeY, eyeSize, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(faceX + faceWidth - 4, eyeY, eyeSize, 0, Math.PI*2); ctx.fill();
+             ctx.beginPath(); ctx.ellipse(faceX + faceWidth/2 - 2, eyeY + 4, eyeSize, eyeSize*0.6, 0, 0, Math.PI*2); ctx.fill();
 
-             // Accessories
              if (ent.enemyVariant === 'FAMILY_DAD') {
                  ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
                  ctx.beginPath(); ctx.arc(faceX + 4, eyeY, eyeSize + 1, 0, Math.PI*2); ctx.stroke();
                  ctx.beginPath(); ctx.arc(faceX + faceWidth - 4, eyeY, eyeSize + 1, 0, Math.PI*2); ctx.stroke();
                  ctx.beginPath(); ctx.moveTo(faceX + 4 + eyeSize + 1, eyeY); ctx.lineTo(faceX + faceWidth - 4 - eyeSize - 1, eyeY); ctx.stroke();
              } else if (ent.enemyVariant === 'FAMILY_MOM') {
-                 ctx.fillStyle = '#DC2626'; 
-                 ctx.fillRect(ent.pos.x + 2, ent.pos.y + ent.size.y * 0.65, ent.size.x - 4, 4);
-                 ctx.beginPath();
-                 ctx.moveTo(ent.pos.x + ent.size.x - 2, ent.pos.y + ent.size.y * 0.65);
-                 ctx.quadraticCurveTo(ent.pos.x + ent.size.x + 10, ent.pos.y + ent.size.y * 0.7, ent.pos.x + ent.size.x + 15, ent.pos.y + ent.size.y * 0.8 + Math.sin(time/200)*3);
-                 ctx.lineTo(ent.pos.x + ent.size.x - 2, ent.pos.y + ent.size.y * 0.75);
-                 ctx.fill();
+                 ctx.fillStyle = '#DC2626'; ctx.fillRect(ent.pos.x + 2, ent.pos.y + ent.size.y * 0.65, ent.size.x - 4, 4);
+                 ctx.beginPath(); ctx.moveTo(ent.pos.x + ent.size.x - 2, ent.pos.y + ent.size.y * 0.65); ctx.quadraticCurveTo(ent.pos.x + ent.size.x + 10, ent.pos.y + ent.size.y * 0.7, ent.pos.x + ent.size.x + 15, ent.pos.y + ent.size.y * 0.8 + Math.sin(time/200)*3); ctx.lineTo(ent.pos.x + ent.size.x - 2, ent.pos.y + ent.size.y * 0.75); ctx.fill();
              }
-
              ctx.restore();
          }
          else if (ent.enemyVariant === 'BAT' || ent.enemyVariant === 'BIRD') {
              const isBird = ent.enemyVariant === 'BIRD';
              const flap = Math.sin(time / 50) * 8;
-             
              ctx.fillStyle = isBird ? '#FFF' : COLORS.enemyBat; 
-             ctx.beginPath();
-             ctx.ellipse(cx, cy, 12, 10, 0, 0, Math.PI * 2); // Body
-             ctx.fill();
-             
-             // Wings
+             ctx.beginPath(); ctx.ellipse(cx, cy, 12, 10, 0, 0, Math.PI * 2); ctx.fill();
              ctx.fillStyle = isBird ? '#93C5FD' : '#000';
-             ctx.beginPath();
-             ctx.moveTo(cx - 5, cy);
-             ctx.lineTo(cx - 20, cy - 10 + flap);
-             ctx.lineTo(cx - 10, cy + 5);
-             ctx.fill();
-             ctx.beginPath();
-             ctx.moveTo(cx + 5, cy);
-             ctx.lineTo(cx + 20, cy - 10 + flap);
-             ctx.lineTo(cx + 10, cy + 5);
-             ctx.fill();
-
-             // Eyes
+             ctx.beginPath(); ctx.moveTo(cx - 5, cy); ctx.lineTo(cx - 20, cy - 10 + flap); ctx.lineTo(cx - 10, cy + 5); ctx.fill();
+             ctx.beginPath(); ctx.moveTo(cx + 5, cy); ctx.lineTo(cx + 20, cy - 10 + flap); ctx.lineTo(cx + 10, cy + 5); ctx.fill();
              ctx.fillStyle = isBird ? '#000' : '#F59E0B';
-             ctx.beginPath(); ctx.arc(cx - 4, cy - 2, isBird ? 2 : 1.5, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(cx + 4, cy - 2, isBird ? 2 : 1.5, 0, Math.PI*2); ctx.fill();
-             
+             ctx.beginPath(); ctx.arc(cx - 4, cy - 2, isBird ? 2 : 1.5, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 4, cy - 2, isBird ? 2 : 1.5, 0, Math.PI*2); ctx.fill();
              if (isBird) {
-                 ctx.fillStyle = '#F59E0B'; // Beak
-                 ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + (ent.vel.x > 0 ? 8 : -8), cy + 2); ctx.lineTo(cx, cy + 4); ctx.fill();
+                 ctx.fillStyle = '#F59E0B'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + (ent.vel.x > 0 ? 8 : -8), cy + 2); ctx.lineTo(cx, cy + 4); ctx.fill();
              }
          } 
          else if (ent.enemyVariant === 'FISH') {
              ctx.fillStyle = COLORS.enemyFish;
-             // Fish body
-             ctx.beginPath();
-             if (ent.vel.x > 0) {
-                 ctx.ellipse(cx, cy, 16, 10, 0, 0, Math.PI*2);
-             } else {
-                 ctx.ellipse(cx, cy, 16, 10, 0, 0, Math.PI*2);
-             }
-             ctx.fill();
-             // Tail
+             ctx.beginPath(); ctx.ellipse(cx, cy, 16, 10, 0, 0, Math.PI*2); ctx.fill();
              const tailWag = Math.sin(time / 100) * 3;
              ctx.beginPath();
-             if (ent.vel.x > 0) {
-                 ctx.moveTo(cx - 16, cy); ctx.lineTo(cx - 24, cy - 6 + tailWag); ctx.lineTo(cx - 24, cy + 6 + tailWag);
-             } else {
-                 ctx.moveTo(cx + 16, cy); ctx.lineTo(cx + 24, cy - 6 + tailWag); ctx.lineTo(cx + 24, cy + 6 + tailWag);
-             }
+             if (ent.vel.x > 0) { ctx.moveTo(cx - 16, cy); ctx.lineTo(cx - 24, cy - 6 + tailWag); ctx.lineTo(cx - 24, cy + 6 + tailWag); } 
+             else { ctx.moveTo(cx + 16, cy); ctx.lineTo(cx + 24, cy - 6 + tailWag); ctx.lineTo(cx + 24, cy + 6 + tailWag); }
              ctx.fill();
-             // Eye
-             ctx.fillStyle = '#FFF';
-             ctx.beginPath(); ctx.arc(cx + (ent.vel.x > 0 ? 8 : -8), cy - 2, 4, 0, Math.PI*2); ctx.fill();
-             ctx.fillStyle = '#000';
-             ctx.beginPath(); ctx.arc(cx + (ent.vel.x > 0 ? 9 : -9), cy - 2, 1.5, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(cx + (ent.vel.x > 0 ? 8 : -8), cy - 2, 4, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx + (ent.vel.x > 0 ? 9 : -9), cy - 2, 1.5, 0, Math.PI*2); ctx.fill();
          }
          else if (ent.enemyVariant === 'SLIME') {
-             ctx.fillStyle = COLORS.enemySlime;
-             const wobble = Math.sin(time / 150) * 2;
-             ctx.beginPath();
-             ctx.arc(cx, cy + 5, 12 + wobble, Math.PI, 0); // Top half
-             ctx.lineTo(ent.pos.x + ent.size.x, ent.pos.y + ent.size.y);
-             ctx.lineTo(ent.pos.x, ent.pos.y + ent.size.y);
-             ctx.fill();
-             
-             ctx.fillStyle = '#FFF';
-             ctx.beginPath(); ctx.arc(cx - 5, cy, 3, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(cx + 5, cy, 3, 0, Math.PI*2); ctx.fill();
-             ctx.fillStyle = '#000';
-             ctx.beginPath(); ctx.arc(cx - 5, cy, 1, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(cx + 5, cy, 1, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = COLORS.enemySlime; const wobble = Math.sin(time / 150) * 2;
+             ctx.beginPath(); ctx.arc(cx, cy + 5, 12 + wobble, Math.PI, 0); ctx.lineTo(ent.pos.x + ent.size.x, ent.pos.y + ent.size.y); ctx.lineTo(ent.pos.x, ent.pos.y + ent.size.y); ctx.fill();
+             ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(cx - 5, cy, 3, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 5, cy, 3, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx - 5, cy, 1, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 5, cy, 1, 0, Math.PI*2); ctx.fill();
          }
          else if (ent.enemyVariant === 'TANK' || ent.enemyVariant === 'SKELETON' || ent.enemyVariant === 'MUMMY' || ent.enemyVariant === 'ZOMBIE') {
              if (ent.enemyVariant === 'TANK') {
-                 // Knight/Tank
                  ctx.fillStyle = '#52525B'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
-                 ctx.fillStyle = '#3F3F46'; ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 10, ent.size.x, 10); // Treads
-                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 5, ent.pos.y + 10, ent.size.x - 10, 5); // Visor
-                 ctx.fillStyle = '#EF4444'; ctx.fillRect(ent.pos.x + 15, ent.pos.y + 10, 4, 5); // Eye glow
+                 ctx.fillStyle = '#3F3F46'; ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 10, ent.size.x, 10); 
+                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 5, ent.pos.y + 10, ent.size.x - 10, 5); 
+                 ctx.fillStyle = '#EF4444'; ctx.fillRect(ent.pos.x + 15, ent.pos.y + 10, 4, 5); 
              } else if (ent.enemyVariant === 'SKELETON') {
-                 ctx.fillStyle = '#E2E8F0'; ctx.fillRect(ent.pos.x + 8, ent.pos.y, 14, 14); // Skull
-                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 10, ent.pos.y + 4, 3, 3); ctx.fillRect(ent.pos.x + 17, ent.pos.y + 4, 3, 3); // Eyes
-                 ctx.fillStyle = '#E2E8F0'; ctx.fillRect(ent.pos.x + 12, ent.pos.y + 14, 6, 20); // Spine
-                 ctx.fillRect(ent.pos.x + 4, ent.pos.y + 18, 22, 2); // Rib
-                 ctx.fillRect(ent.pos.x + 6, ent.pos.y + 22, 18, 2); // Rib
+                 ctx.fillStyle = '#E2E8F0'; ctx.fillRect(ent.pos.x + 8, ent.pos.y, 14, 14); 
+                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 10, ent.pos.y + 4, 3, 3); ctx.fillRect(ent.pos.x + 17, ent.pos.y + 4, 3, 3); 
+                 ctx.fillStyle = '#E2E8F0'; ctx.fillRect(ent.pos.x + 12, ent.pos.y + 14, 6, 20); ctx.fillRect(ent.pos.x + 4, ent.pos.y + 18, 22, 2); ctx.fillRect(ent.pos.x + 6, ent.pos.y + 22, 18, 2); 
              } else if (ent.enemyVariant === 'MUMMY') {
                  ctx.fillStyle = '#FDE68A'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
-                 ctx.fillStyle = '#D97706'; // Bandage lines
-                 for(let i=5; i<ent.size.y; i+=8) ctx.fillRect(ent.pos.x, ent.pos.y + i, ent.size.x, 2);
-                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 5, ent.pos.y + 10, 20, 6); // Eye slit
+                 ctx.fillStyle = '#D97706'; for(let i=5; i<ent.size.y; i+=8) ctx.fillRect(ent.pos.x, ent.pos.y + i, ent.size.x, 2);
+                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + 5, ent.pos.y + 10, 20, 6); 
                  ctx.fillStyle = '#EF4444'; ctx.fillRect(ent.pos.x + 8, ent.pos.y + 12, 3, 3); ctx.fillRect(ent.pos.x + 18, ent.pos.y + 12, 3, 3);
              } else if (ent.enemyVariant === 'ZOMBIE') {
-                 ctx.fillStyle = '#4D7C0F'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y); // Green skin
-                 ctx.fillStyle = '#3F6212'; ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 15, ent.size.x, 15); // Pants
-                 // Arms out
-                 ctx.fillStyle = '#4D7C0F'; 
-                 if (ent.vel.x > 0) ctx.fillRect(ent.pos.x + ent.size.x, ent.pos.y + 15, 10, 6);
-                 else ctx.fillRect(ent.pos.x - 10, ent.pos.y + 15, 10, 6);
-                 // Face
-                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + (ent.vel.x > 0 ? 18 : 4), ent.pos.y + 8, 4, 4); // Eye
-                 ctx.fillStyle = '#DC2626'; ctx.fillRect(ent.pos.x + (ent.vel.x > 0 ? 18 : 4), ent.pos.y + 18, 6, 2); // Mouth
+                 ctx.fillStyle = '#4D7C0F'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y); 
+                 ctx.fillStyle = '#3F6212'; ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 15, ent.size.x, 15); 
+                 ctx.fillStyle = '#4D7C0F'; if (ent.vel.x > 0) ctx.fillRect(ent.pos.x + ent.size.x, ent.pos.y + 15, 10, 6); else ctx.fillRect(ent.pos.x - 10, ent.pos.y + 15, 10, 6);
+                 ctx.fillStyle = '#000'; ctx.fillRect(ent.pos.x + (ent.vel.x > 0 ? 18 : 4), ent.pos.y + 8, 4, 4); 
+                 ctx.fillStyle = '#DC2626'; ctx.fillRect(ent.pos.x + (ent.vel.x > 0 ? 18 : 4), ent.pos.y + 18, 6, 2); 
              }
          }
          else if (ent.enemyVariant === 'ALIEN' || ent.enemyVariant === 'UFO') {
              if (ent.enemyVariant === 'UFO') {
-                 ctx.fillStyle = '#94A3B8'; // Saucer
-                 ctx.beginPath(); ctx.ellipse(cx, cy + 5, 20, 8, 0, 0, Math.PI*2); ctx.fill();
-                 ctx.fillStyle = '#60A5FA'; // Dome
-                 ctx.beginPath(); ctx.arc(cx, cy - 2, 10, Math.PI, 0); ctx.fill();
-                 // Lights
-                 const blink = Math.floor(time / 200) % 2 === 0;
-                 ctx.fillStyle = blink ? '#FACC15' : '#EF4444';
-                 ctx.beginPath(); ctx.arc(cx - 12, cy + 5, 2, 0, Math.PI*2); ctx.fill();
-                 ctx.beginPath(); ctx.arc(cx, cy + 8, 2, 0, Math.PI*2); ctx.fill();
-                 ctx.beginPath(); ctx.arc(cx + 12, cy + 5, 2, 0, Math.PI*2); ctx.fill();
+                 ctx.fillStyle = '#94A3B8'; ctx.beginPath(); ctx.ellipse(cx, cy + 5, 20, 8, 0, 0, Math.PI*2); ctx.fill();
+                 ctx.fillStyle = '#60A5FA'; ctx.beginPath(); ctx.arc(cx, cy - 2, 10, Math.PI, 0); ctx.fill();
+                 const blink = Math.floor(time / 200) % 2 === 0; ctx.fillStyle = blink ? '#FACC15' : '#EF4444';
+                 ctx.beginPath(); ctx.arc(cx - 12, cy + 5, 2, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx, cy + 8, 2, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 12, cy + 5, 2, 0, Math.PI*2); ctx.fill();
              } else {
-                 // Alien
-                 ctx.fillStyle = '#84CC16'; // Head
-                 ctx.beginPath(); ctx.arc(cx, cy - 5, 10, 0, Math.PI*2); ctx.fill();
-                 ctx.fillRect(cx - 5, cy, 10, 15); // Body
-                 // Eyes
-                 ctx.fillStyle = '#000';
-                 ctx.beginPath(); ctx.ellipse(cx - 4, cy - 5, 3, 5, -0.2, 0, Math.PI*2); ctx.fill();
-                 ctx.beginPath(); ctx.ellipse(cx + 4, cy - 5, 3, 5, 0.2, 0, Math.PI*2); ctx.fill();
+                 ctx.fillStyle = '#84CC16'; ctx.beginPath(); ctx.arc(cx, cy - 5, 10, 0, Math.PI*2); ctx.fill(); ctx.fillRect(cx - 5, cy, 10, 15); 
+                 ctx.fillStyle = '#000'; ctx.beginPath(); ctx.ellipse(cx - 4, cy - 5, 3, 5, -0.2, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(cx + 4, cy - 5, 3, 5, 0.2, 0, Math.PI*2); ctx.fill();
              }
          }
          else {
-             // Standard / Normal Enemy (Goomba-ish)
-             ctx.fillStyle = '#B45309'; // Brown body
-             ctx.beginPath(); 
-             ctx.moveTo(ent.pos.x + 5, ent.pos.y + ent.size.y);
-             ctx.lineTo(ent.pos.x, ent.pos.y + 10);
-             ctx.quadraticCurveTo(ent.pos.x + ent.size.x/2, ent.pos.y - 5, ent.pos.x + ent.size.x, ent.pos.y + 10);
-             ctx.lineTo(ent.pos.x + ent.size.x - 5, ent.pos.y + ent.size.y);
-             ctx.fill();
-             
-             // Feet walking animation
-             const step = Math.floor(time / 100) % 2;
-             ctx.fillStyle = '#000';
-             if (step === 0) {
-                 ctx.fillRect(ent.pos.x - 2, ent.pos.y + ent.size.y - 6, 8, 6);
-                 ctx.fillRect(ent.pos.x + ent.size.x - 6, ent.pos.y + ent.size.y - 6, 8, 6);
-             } else {
-                 ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 6, 8, 6);
-                 ctx.fillRect(ent.pos.x + ent.size.x - 8, ent.pos.y + ent.size.y - 6, 8, 6);
-             }
-
-             // Eyes
-             ctx.fillStyle = '#FFF';
-             const eyeY = ent.pos.y + 10;
-             const eyeOffset = ent.vel.x > 0 ? 4 : -4;
-             ctx.beginPath(); ctx.arc(cx - 5 + eyeOffset, eyeY, 4, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(cx + 5 + eyeOffset, eyeY, 4, 0, Math.PI*2); ctx.fill();
-             
-             ctx.fillStyle = '#000';
-             ctx.beginPath(); ctx.arc(cx - 5 + eyeOffset + (ent.vel.x>0?1:-1), eyeY, 1.5, 0, Math.PI*2); ctx.fill();
-             ctx.beginPath(); ctx.arc(cx + 5 + eyeOffset + (ent.vel.x>0?1:-1), eyeY, 1.5, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#B45309'; ctx.beginPath(); 
+             ctx.moveTo(ent.pos.x + 5, ent.pos.y + ent.size.y); ctx.lineTo(ent.pos.x, ent.pos.y + 10); ctx.quadraticCurveTo(ent.pos.x + ent.size.x/2, ent.pos.y - 5, ent.pos.x + ent.size.x, ent.pos.y + 10); ctx.lineTo(ent.pos.x + ent.size.x - 5, ent.pos.y + ent.size.y); ctx.fill();
+             const step = Math.floor(time / 100) % 2; ctx.fillStyle = '#000';
+             if (step === 0) { ctx.fillRect(ent.pos.x - 2, ent.pos.y + ent.size.y - 6, 8, 6); ctx.fillRect(ent.pos.x + ent.size.x - 6, ent.pos.y + ent.size.y - 6, 8, 6); } else { ctx.fillRect(ent.pos.x, ent.pos.y + ent.size.y - 6, 8, 6); ctx.fillRect(ent.pos.x + ent.size.x - 8, ent.pos.y + ent.size.y - 6, 8, 6); }
+             ctx.fillStyle = '#FFF'; const eyeY = ent.pos.y + 10; const eyeOffset = ent.vel.x > 0 ? 4 : -4; ctx.beginPath(); ctx.arc(cx - 5 + eyeOffset, eyeY, 4, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 5 + eyeOffset, eyeY, 4, 0, Math.PI*2); ctx.fill();
+             ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx - 5 + eyeOffset + (ent.vel.x>0?1:-1), eyeY, 1.5, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx + 5 + eyeOffset + (ent.vel.x>0?1:-1), eyeY, 1.5, 0, Math.PI*2); ctx.fill();
          }
       }
     });
 
+    // Draw Bullets
     bullets.forEach(b => {
-        if (isLevel5) { // Shovel
-            ctx.save(); ctx.translate(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2); 
-            ctx.rotate((Date.now() / 50) % (Math.PI * 2));
-            ctx.fillStyle = COLORS.shovelHandle; ctx.fillRect(-5, -2, 10, 4); ctx.fillStyle = COLORS.shovel; ctx.fillRect(5, -6, 12, 12); 
-            ctx.restore();
-        } else if (isLevel7) { // Laser
+        // Glow for projectiles
+        ctx.shadowBlur = 15; ctx.shadowColor = '#F43F5E';
+        if (isLevel5) { 
+            ctx.save(); ctx.translate(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2); ctx.rotate((Date.now() / 50) % (Math.PI * 2));
+            ctx.fillStyle = COLORS.shovelHandle; ctx.fillRect(-5, -2, 10, 4); ctx.fillStyle = COLORS.shovel; ctx.fillRect(5, -6, 12, 12); ctx.restore();
+        } else if (isLevel7) { 
             ctx.strokeStyle = COLORS.laserBeam; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(b.pos.x, b.pos.y); ctx.lineTo(b.pos.x + (b.vel.x > 0 ? 40 : -40), b.pos.y); ctx.stroke();
-            // Glow for laser
-            ctx.shadowBlur = 10; ctx.shadowColor = COLORS.laserBeam; ctx.stroke(); ctx.shadowBlur = 0;
-        } else if (isLevel6) { // Shuriken
-             ctx.save(); ctx.translate(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2);
-             ctx.rotate((Date.now() / 30) % (Math.PI * 2));
-             ctx.fillStyle = COLORS.shuriken;
-             ctx.beginPath();
-             // 4-point star
-             for(let i=0; i<4; i++) {
-                 ctx.rotate(Math.PI/2);
-                 ctx.moveTo(0, 0); ctx.lineTo(10, 3); ctx.lineTo(0, 6); ctx.lineTo(-10, 3);
-             }
-             ctx.fill();
-             ctx.restore();
-        } else if (isLevel4) { // Harpoon Projectile
-            ctx.save();
-            ctx.translate(b.pos.x, b.pos.y);
-            // Rotate if moving left
-            if (b.vel.x < 0) ctx.scale(-1, 1);
-            
-            // Shaft
-            ctx.fillStyle = COLORS.harpoonShaft;
-            ctx.fillRect(-10, -2, 30, 4);
-            // Tip (Barbed)
-            ctx.fillStyle = COLORS.harpoonTip;
-            ctx.beginPath();
-            ctx.moveTo(20, 0);
-            ctx.lineTo(10, -5);
-            ctx.lineTo(12, 0);
-            ctx.lineTo(10, 5);
-            ctx.fill();
-            
-            ctx.restore();
-        } else if (isLevel2) { // Torch projectile
-            ctx.fillStyle = '#78350F'; // Wood stick
-            ctx.fillRect(b.pos.x, b.pos.y - 2, 15, 4);
-            // Flame
-            ctx.fillStyle = Math.random() > 0.5 ? '#F59E0B' : '#EF4444';
-            ctx.beginPath(); ctx.arc(b.pos.x + (b.vel.x > 0 ? 15 : 0), b.pos.y, 6 + Math.random()*2, 0, Math.PI*2); ctx.fill();
-        } else if (isLevel3) { // Lightning Ball
-            ctx.fillStyle = '#FEF08A';
-            ctx.beginPath(); ctx.arc(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2, b.size.x, 0, Math.PI*2); ctx.fill();
-            ctx.strokeStyle = '#38BDF8';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(b.pos.x - 5, b.pos.y - 5);
-            ctx.lineTo(b.pos.x + 5, b.pos.y);
-            ctx.lineTo(b.pos.x - 5, b.pos.y + 5);
-            ctx.lineTo(b.pos.x + 5, b.pos.y + 10);
-            ctx.stroke();
-        } else { // Bullet
+        } else if (isLevel6) { 
+             ctx.save(); ctx.translate(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2); ctx.rotate((Date.now() / 30) % (Math.PI * 2));
+             ctx.fillStyle = COLORS.shuriken; ctx.beginPath(); for(let i=0; i<4; i++) { ctx.rotate(Math.PI/2); ctx.moveTo(0, 0); ctx.lineTo(10, 3); ctx.lineTo(0, 6); ctx.lineTo(-10, 3); } ctx.fill(); ctx.restore();
+        } else if (isLevel4) { 
+            ctx.save(); ctx.translate(b.pos.x, b.pos.y); if (b.vel.x < 0) ctx.scale(-1, 1);
+            ctx.fillStyle = COLORS.harpoonShaft; ctx.fillRect(-10, -2, 30, 4); ctx.fillStyle = COLORS.harpoonTip; ctx.beginPath(); ctx.moveTo(20, 0); ctx.lineTo(10, -5); ctx.lineTo(12, 0); ctx.lineTo(10, 5); ctx.fill(); ctx.restore();
+        } else if (isLevel2) { 
+            ctx.fillStyle = '#78350F'; ctx.fillRect(b.pos.x, b.pos.y - 2, 15, 4); ctx.fillStyle = Math.random() > 0.5 ? '#F59E0B' : '#EF4444'; ctx.beginPath(); ctx.arc(b.pos.x + (b.vel.x > 0 ? 15 : 0), b.pos.y, 6 + Math.random()*2, 0, Math.PI*2); ctx.fill();
+        } else if (isLevel3) { 
+            ctx.fillStyle = '#FEF08A'; ctx.beginPath(); ctx.arc(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2, b.size.x, 0, Math.PI*2); ctx.fill();
+            ctx.strokeStyle = '#38BDF8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(b.pos.x - 5, b.pos.y - 5); ctx.lineTo(b.pos.x + 5, b.pos.y); ctx.lineTo(b.pos.x - 5, b.pos.y + 5); ctx.lineTo(b.pos.x + 5, b.pos.y + 10); ctx.stroke();
+        } else { 
             ctx.fillStyle = COLORS.projectile; ctx.beginPath(); ctx.arc(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2, b.size.x/2, 0, Math.PI * 2); ctx.fill();
         }
+        ctx.shadowBlur = 0;
     });
 
-    // 5. 绘制玩家 (Player) - 矢量可爱风格 (重构回原来的圆润风格)
+    // 5. 绘制玩家 (Player)
     if (player.isInvulnerable && Math.floor(Date.now() / 100) % 2 === 0) {
        ctx.globalAlpha = 0.5; 
     }
+
+    // Motion Trails
+    trailsRef.current.forEach(t => {
+        ctx.save();
+        ctx.globalAlpha = t.alpha * 0.3;
+        ctx.translate(t.x + player.size.x/2, t.y + player.size.y);
+        ctx.scale(t.facingRight ? 1 : -1, 1); // Not quite right if player flipped scale
+        ctx.fillStyle = '#FFF';
+        ctx.beginPath();
+        ctx.roundRect(-player.size.x/2, -player.size.y, player.size.x, player.size.y, 6);
+        ctx.fill();
+        ctx.restore();
+    });
     
     // 应用挤压与拉伸 (Squash & Stretch)
     ctx.save();
@@ -1767,159 +1658,143 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
             else { ctx.moveTo(player.pos.x + 20, player.pos.y + 20); ctx.lineTo(player.pos.x + 40, player.pos.y + 35 + tailWiggle); ctx.lineTo(player.pos.x + 40, player.pos.y + 15 + tailWiggle); }
             ctx.fill(); ctx.fillStyle = COLORS.bear; ctx.beginPath(); ctx.roundRect(player.pos.x, player.pos.y, player.size.x, 20, 5); ctx.fill();
         } else {
-            // Normal Body
-            if (isLevel6) ctx.fillStyle = COLORS.ninjaBody; // Ninja Suit
+            if (isLevel6) ctx.fillStyle = COLORS.ninjaBody; 
             ctx.beginPath(); ctx.roundRect(player.pos.x, player.pos.y, player.size.x, player.size.y, 6); ctx.fill();
-            // Ears
             ctx.fillStyle = isLevel6 ? COLORS.ninjaBody : COLORS.bear;
-            ctx.beginPath();
-            ctx.arc(player.pos.x + 4, player.pos.y + 2, 5, 0, Math.PI * 2); // L Ear
-            ctx.arc(player.pos.x + player.size.x - 4, player.pos.y + 2, 5, 0, Math.PI * 2); // R Ear
-            ctx.fill();
+            ctx.beginPath(); ctx.arc(player.pos.x + 4, player.pos.y + 2, 5, 0, Math.PI * 2); ctx.arc(player.pos.x + player.size.x - 4, player.pos.y + 2, 5, 0, Math.PI * 2); ctx.fill();
         }
         
-        // Face Area
         ctx.fillStyle = player.drunkTimer > 0 ? COLORS.bearFaceDrunk : COLORS.bearFace; 
         const faceX = player.facingRight ? player.pos.x + 12 : player.pos.x + 2; 
         
         if (isLevel6) {
-             // Ninja Mask (Only eyes visible)
-             ctx.fillStyle = '#FDE047'; // Skin tone for eyes
-             ctx.fillRect(faceX, player.pos.y + 10, 16, 6);
+             ctx.fillStyle = '#FDE047'; ctx.fillRect(faceX, player.pos.y + 10, 16, 6);
         } else {
              ctx.beginPath(); ctx.roundRect(faceX, player.pos.y + 8, 16, 12, 4); ctx.fill();
         }
         
-        // Eyes
-        ctx.fillStyle = '#000'; 
-        const eyeOffsetX = player.facingRight ? 4 : 0; 
-        ctx.beginPath(); 
-        ctx.arc(faceX + 4 + eyeOffsetX, player.pos.y + 11, 2, 0, Math.PI*2); // L Eye
-        ctx.arc(faceX + 11 + eyeOffsetX, player.pos.y + 11, 2, 0, Math.PI*2); // R Eye
-        ctx.fill();
+        ctx.fillStyle = '#000'; const eyeOffsetX = player.facingRight ? 4 : 0; 
+        ctx.beginPath(); ctx.arc(faceX + 4 + eyeOffsetX, player.pos.y + 11, 2, 0, Math.PI*2); ctx.arc(faceX + 11 + eyeOffsetX, player.pos.y + 11, 2, 0, Math.PI*2); ctx.fill();
 
         if (!isLevel6) {
-            // Nose
-            ctx.beginPath();
-            ctx.ellipse(faceX + 7.5 + eyeOffsetX, player.pos.y + 15, 2.5, 1.5, 0, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.beginPath(); ctx.ellipse(faceX + 7.5 + eyeOffsetX, player.pos.y + 15, 2.5, 1.5, 0, 0, Math.PI * 2); ctx.fill();
         }
 
-        // --- Accessories ---
         if (isLevel5) {
-             // Archaeologist Hat
-             ctx.fillStyle = '#78350F'; // Brown
-             ctx.fillRect(player.pos.x - 5, player.pos.y - 5, player.size.x + 10, 6); // Brim
-             ctx.fillRect(player.pos.x + 5, player.pos.y - 12, player.size.x - 10, 8); // Top
+             ctx.fillStyle = '#78350F'; ctx.fillRect(player.pos.x - 5, player.pos.y - 5, player.size.x + 10, 6); ctx.fillRect(player.pos.x + 5, player.pos.y - 12, player.size.x - 10, 8);
         } else if (isLevel6) {
-             // Ninja Headband
-             ctx.fillStyle = COLORS.ninjaSash;
-             ctx.fillRect(player.pos.x, player.pos.y + 2, player.size.x, 4);
-             // Flowing tails
+             ctx.fillStyle = COLORS.ninjaSash; ctx.fillRect(player.pos.x, player.pos.y + 2, player.size.x, 4);
              const tailY = player.pos.y + 4 + Math.sin(Date.now()/100)*2;
-             if (player.facingRight) {
-                 ctx.beginPath(); ctx.moveTo(player.pos.x, player.pos.y + 4); ctx.lineTo(player.pos.x - 15, tailY); ctx.lineTo(player.pos.x - 15, tailY + 5); ctx.fill();
-             } else {
-                 ctx.beginPath(); ctx.moveTo(player.pos.x + player.size.x, player.pos.y + 4); ctx.lineTo(player.pos.x + player.size.x + 15, tailY); ctx.lineTo(player.pos.x + player.size.x + 15, tailY + 5); ctx.fill();
-             }
+             if (player.facingRight) { ctx.beginPath(); ctx.moveTo(player.pos.x, player.pos.y + 4); ctx.lineTo(player.pos.x - 15, tailY); ctx.lineTo(player.pos.x - 15, tailY + 5); ctx.fill(); } else { ctx.beginPath(); ctx.moveTo(player.pos.x + player.size.x, player.pos.y + 4); ctx.lineTo(player.pos.x + player.size.x + 15, tailY); ctx.lineTo(player.pos.x + player.size.x + 15, tailY + 5); ctx.fill(); }
         }
     }
     
     ctx.restore();
 
-    // Held Items
     if (!isLevel6 && !isSpaceLevel && !isHiddenLevel) { 
-        // Default / Torch / Umbrella / Shovel
-        const gunX = player.facingRight ? player.pos.x + 20 : player.pos.x - 5;
-        const gunY = player.pos.y + 18;
-        
-        if (isLevel2) { // Torch
-             ctx.fillStyle = '#78350F'; ctx.fillRect(gunX, gunY, 4, 12);
-             ctx.fillStyle = Math.random() > 0.5 ? '#F59E0B' : '#EF4444';
-             ctx.beginPath(); ctx.arc(gunX + 2, gunY - 2, 4, 0, Math.PI*2); ctx.fill();
-        } else if (isLevel3) { // Umbrella
-             ctx.fillStyle = '#374151'; // Pole
-             ctx.fillRect(gunX, gunY - 10, 2, 20);
-             ctx.fillStyle = '#6366F1'; // Top
-             ctx.beginPath(); ctx.arc(gunX + 1, gunY - 10, 12, Math.PI, 0); ctx.fill();
-        } else if (isLevel5) { // Shovel
-             ctx.fillStyle = '#78350F';
-             ctx.save(); ctx.translate(gunX, gunY); ctx.rotate(player.facingRight ? -0.5 : 0.5);
-             ctx.fillRect(0, 0, 4, 15); ctx.fillStyle = '#94A3B8'; ctx.fillRect(-3, 15, 10, 8);
-             ctx.restore();
-        } else if (isLevel4) { // Harpoon Gun
-             ctx.save(); ctx.translate(gunX, gunY); 
-             if (!player.facingRight) ctx.scale(-1, 1);
-             // Stock
-             ctx.fillStyle = '#78350F'; ctx.fillRect(-5, 0, 10, 4);
-             // Barrel
-             ctx.fillStyle = '#9CA3AF'; ctx.fillRect(0, -2, 20, 3);
-             // Trigger mech
-             ctx.fillStyle = '#4B5563'; ctx.fillRect(0, 0, 5, 5);
-             // Spear tip loaded
-             ctx.fillStyle = COLORS.harpoonTip; ctx.beginPath(); ctx.moveTo(20, -0.5); ctx.lineTo(25, -0.5); ctx.stroke();
-             ctx.restore();
-        } else { // Gun
-             ctx.fillStyle = COLORS.gun;
-             ctx.fillRect(gunX, gunY, 15, 6);
+        const gunX = player.facingRight ? player.pos.x + 20 : player.pos.x - 5; const gunY = player.pos.y + 18;
+        if (isLevel2) { 
+             ctx.fillStyle = '#78350F'; ctx.fillRect(gunX, gunY, 4, 12); ctx.fillStyle = Math.random() > 0.5 ? '#F59E0B' : '#EF4444'; ctx.beginPath(); ctx.arc(gunX + 2, gunY - 2, 4, 0, Math.PI*2); ctx.fill();
+        } else if (isLevel3) { 
+             ctx.fillStyle = '#374151'; ctx.fillRect(gunX, gunY - 10, 2, 20); ctx.fillStyle = '#6366F1'; ctx.beginPath(); ctx.arc(gunX + 1, gunY - 10, 12, Math.PI, 0); ctx.fill();
+        } else if (isLevel5) { 
+             ctx.fillStyle = '#78350F'; ctx.save(); ctx.translate(gunX, gunY); ctx.rotate(player.facingRight ? -0.5 : 0.5); ctx.fillRect(0, 0, 4, 15); ctx.fillStyle = '#94A3B8'; ctx.fillRect(-3, 15, 10, 8); ctx.restore();
+        } else if (isLevel4) { 
+             ctx.save(); ctx.translate(gunX, gunY); if (!player.facingRight) ctx.scale(-1, 1);
+             ctx.fillStyle = '#78350F'; ctx.fillRect(-5, 0, 10, 4); ctx.fillStyle = '#9CA3AF'; ctx.fillRect(0, -2, 20, 3); ctx.fillStyle = '#4B5563'; ctx.fillRect(0, 0, 5, 5); ctx.fillStyle = COLORS.harpoonTip; ctx.beginPath(); ctx.moveTo(20, -0.5); ctx.lineTo(25, -0.5); ctx.stroke(); ctx.restore();
+        } else { 
+             ctx.fillStyle = COLORS.gun; ctx.fillRect(gunX, gunY, 15, 6);
         }
     }
 
     ctx.globalAlpha = 1.0;
     ctx.restore();
 
-    // === Post-Processing Overlays (Screen Space) ===
-    if (weather === 'CAVE') {
-         // Multi-light support for Cave
-         const overlayCtx = overlayCanvasRef.current?.getContext('2d');
-         if (overlayCtx && overlayCanvasRef.current) {
-             overlayCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-             
-             // 1. Fill darkness
-             overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.95)';
-             overlayCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-             
-             // 2. Cut holes
-             overlayCtx.globalCompositeOperation = 'destination-out';
-             
-             // Player Light
-             const px = player.pos.x - cameraX + player.size.x / 2;
-             const py = player.pos.y + player.size.y / 2;
-             const pGrad = overlayCtx.createRadialGradient(px, py, 40, px, py, 250);
-             pGrad.addColorStop(0, 'rgba(0,0,0,1)');
-             pGrad.addColorStop(1, 'rgba(0,0,0,0)');
-             overlayCtx.fillStyle = pGrad;
-             overlayCtx.beginPath(); overlayCtx.arc(px, py, 250, 0, Math.PI*2); overlayCtx.fill();
-             
-             // Projectile Lights (Torches)
-             if (isLevel2) {
-                 bullets.forEach(b => {
-                     const bx = b.pos.x - cameraX + b.size.x / 2;
-                     const by = b.pos.y + b.size.y / 2;
-                     // Skip if offscreen
-                     if (bx < -50 || bx > CANVAS_WIDTH + 50) return;
+    // === Post-Processing: Lighting Overlay ===
+    const overlayCtx = lightingCanvasRef.current?.getContext('2d');
+    if (overlayCtx && lightingCanvasRef.current) {
+        overlayCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        // Base Ambient Darkness
+        let ambientDarkness = 0.05; // Bright Day
+        if (weather === 'CAVE') ambientDarkness = 0.85; // Reduced from 0.95
+        if (weather === 'TOMB') ambientDarkness = 0.7;  // Reduced from 0.8
+        if (weather === 'SPACE') ambientDarkness = 0.3; // Reduced significantly from 0.6
+        if (weather === 'TRAIN') ambientDarkness = 0.1; // Reduced significantly from 0.7 for Daylight
+        if (weather === 'RAIN') ambientDarkness = 0.4;
+        
+        overlayCtx.fillStyle = `rgba(0, 0, 0, ${ambientDarkness})`;
+        overlayCtx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        // Cut out lights
+        overlayCtx.globalCompositeOperation = 'destination-out';
+        
+        // Player Light
+        const px = player.pos.x - cameraX + player.size.x / 2 + shakeX;
+        const py = player.pos.y + player.size.y / 2 + shakeY;
+        const radius = weather === 'CAVE' ? 250 : 150;
+        
+        const pGrad = overlayCtx.createRadialGradient(px, py, 20, px, py, radius);
+        pGrad.addColorStop(0, 'rgba(0,0,0,1)');
+        pGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        overlayCtx.fillStyle = pGrad;
+        overlayCtx.beginPath(); overlayCtx.arc(px, py, radius, 0, Math.PI*2); overlayCtx.fill();
+        
+        // Bullet Lights
+        bullets.forEach(b => {
+             // Shovels (Level 5) and Shurikens (Level 6) do not emit light
+             if (isLevel5 || isLevel6) return;
 
-                     const bGrad = overlayCtx.createRadialGradient(bx, by, 20, bx, by, 150);
-                     bGrad.addColorStop(0, 'rgba(0,0,0,1)');
-                     bGrad.addColorStop(1, 'rgba(0,0,0,0)');
-                     overlayCtx.fillStyle = bGrad;
-                     overlayCtx.beginPath(); overlayCtx.arc(bx, by, 150, 0, Math.PI*2); overlayCtx.fill();
-                 });
-             }
+             const bx = b.pos.x - cameraX + b.size.x / 2 + shakeX;
+             const by = b.pos.y + b.size.y / 2 + shakeY;
+             if (bx < -50 || bx > CANVAS_WIDTH + 50) return;
+             const bGrad = overlayCtx.createRadialGradient(bx, by, 10, bx, by, 100);
+             bGrad.addColorStop(0, 'rgba(0,0,0,1)');
+             bGrad.addColorStop(1, 'rgba(0,0,0,0)');
+             overlayCtx.fillStyle = bGrad;
+             overlayCtx.beginPath(); overlayCtx.arc(bx, by, 100, 0, Math.PI*2); overlayCtx.fill();
+        });
 
-             overlayCtx.globalCompositeOperation = 'source-over';
-             
-             // Draw overlay to main canvas
-             ctx.drawImage(overlayCanvasRef.current, 0, 0);
-         }
-    } else if (isSeaLevel) {
-         // Simple vignette for sea
-         const playerScreenX = player.pos.x - cameraX + player.size.x / 2;
-         const playerScreenY = player.pos.y + player.size.y / 2;
-         const gradient = ctx.createRadialGradient(playerScreenX, playerScreenY, 60, playerScreenX, playerScreenY, 500);
-         gradient.addColorStop(0, 'rgba(0,0,0,0)'); gradient.addColorStop(1, 'rgba(0,0,0,0.8)'); 
-         ctx.fillStyle = gradient; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        // Collectable Lights (Coins, Checkpoints)
+        entitiesRef.current.forEach(e => {
+            if (e.isDead) return;
+            const ex = e.pos.x - cameraX + e.size.x/2 + shakeX;
+            const ey = e.pos.y + e.size.y/2 + shakeY;
+            if (ex < -50 || ex > CANVAS_WIDTH + 50) return;
+
+            if (e.type === EntityType.COIN || e.type === EntityType.CHECKPOINT || e.type === EntityType.POTION || e.type === EntityType.WINE) {
+                const glowSize = 60;
+                const cGrad = overlayCtx.createRadialGradient(ex, ey, 5, ex, ey, glowSize);
+                cGrad.addColorStop(0, 'rgba(0,0,0,0.8)');
+                cGrad.addColorStop(1, 'rgba(0,0,0,0)');
+                overlayCtx.fillStyle = cGrad;
+                overlayCtx.beginPath(); overlayCtx.arc(ex, ey, glowSize, 0, Math.PI*2); overlayCtx.fill();
+            }
+        });
+
+        overlayCtx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(lightingCanvasRef.current, 0, 0);
     }
+
+    // === Post-Processing: Vignette & Chromatic Aberration ===
+    
+    // Vignette
+    const vignette = ctx.createRadialGradient(CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_HEIGHT/3, CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_HEIGHT * 0.8);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, `rgba(0,0,0,${VISUALS.vignetteStrength})`);
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // Chromatic Aberration (Fake RGB split on edges)
+    // We only simulate this by drawing the canvas over itself with slight offsets and color blending if we had more layers, 
+    // but a simpler way in 2D context without heavy perf hit is harder. 
+    // Instead, let's just do a color tint overlay for atmosphere.
+    if (weather === 'CAVE') {
+        ctx.fillStyle = 'rgba(0, 0, 20, 0.1)'; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    } else if (weather === 'SUNNY') {
+        ctx.fillStyle = 'rgba(255, 255, 200, 0.05)'; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+
 
     const boss = entitiesRef.current.find(e => e.type === EntityType.ENEMY && e.maxHealth && e.maxHealth > 2 && Math.abs(e.pos.x - player.pos.x) < 500 && !e.isDead);
     if (boss) {
