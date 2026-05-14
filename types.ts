@@ -4,6 +4,7 @@ export enum GameStatus {
   MENU = 'MENU',             // 主菜单
   INTRO = 'INTRO',           // 开场动画
   PLAYING = 'PLAYING',       // 游戏进行中
+  PAUSED = 'PAUSED',         // 游戏暂停 (NEW)
   GAME_OVER = 'GAME_OVER',   // 游戏结束
   LEVEL_COMPLETE = 'LEVEL_COMPLETE', // 关卡完成
   VICTORY = 'VICTORY',       // 通关（保留字段）

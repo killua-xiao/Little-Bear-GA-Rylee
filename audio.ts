@@ -21,6 +21,18 @@ class AudioController {
     }
   }
 
+  pause() {
+    if (this.ctx && this.ctx.state === 'running') {
+      this.ctx.suspend();
+    }
+  }
+
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
+
   /**
    * 播放单音
    * @param freq 频率 (Hz)

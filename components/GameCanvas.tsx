@@ -1134,8 +1134,22 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
   const draw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const physicalWidth = Math.floor(CANVAS_WIDTH * dpr);
+    const physicalHeight = Math.floor(CANVAS_HEIGHT * dpr);
+
+    if (canvas.width !== physicalWidth || canvas.height !== physicalHeight) {
+        canvas.width = physicalWidth;
+        canvas.height = physicalHeight;
+    }
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.imageSmoothingEnabled = false;
 
     const cameraX = Math.floor(cameraRef.current.x);
     const player = playerRef.current;
@@ -1839,6 +1853,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
         ctx.fillText("CHECKPOINT!", CANVAS_WIDTH/2, 100);
         ctx.textAlign = 'left';
     }
+
+    ctx.restore();
   };
 
   const loop = () => {

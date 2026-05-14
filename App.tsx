@@ -196,9 +196,19 @@ const App: React.FC = () => {
     }
   }, [gameState.score, highScore]);
 
-  // SECRET CODE LISTENER
+  // KEYBOARD & SECRET CODE LISTENER
   useEffect(() => {
-      const handleSecretCode = (e: KeyboardEvent) => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.key === 'Escape') {
+              if (gameState.status === GameStatus.PLAYING) {
+                  setGameState(prev => ({ ...prev, status: GameStatus.PAUSED }));
+                  audio.pause();
+              } else if (gameState.status === GameStatus.PAUSED) {
+                  setGameState(prev => ({ ...prev, status: GameStatus.PLAYING }));
+                  audio.resume();
+              }
+          }
+
           if (gameState.status === GameStatus.CREDITS) {
               const newBuffer = (cheatBuffer + e.key).slice(-8); // Keep last 8 chars
               setCheatBuffer(newBuffer);
@@ -211,9 +221,24 @@ const App: React.FC = () => {
           }
       };
       
-      window.addEventListener('keydown', handleSecretCode);
-      return () => window.removeEventListener('keydown', handleSecretCode);
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.status, cheatBuffer]);
+
+  // PAUSE ON BLUR
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && gameState.status === GameStatus.PLAYING) {
+        setGameState(prev => ({ ...prev, status: GameStatus.PAUSED }));
+        audio.pause();
+      }
+    };
+    
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [gameState.status]);
 
   const startGame = (levelId: number = 1) => {
     audio.init(); 
@@ -460,6 +485,23 @@ const App: React.FC = () => {
                     </div>
                 </div>
             </div>
+          </div>
+        )}
+
+        {/* GAME PAUSED */}
+        {gameState.status === GameStatus.PAUSED && (
+          <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-center rounded-lg z-20">
+             <h2 className="pixel-font text-4xl text-white mb-6">游戏暂停</h2>
+             <button 
+                  onClick={() => {
+                      setGameState(prev => ({ ...prev, status: GameStatus.PLAYING }));
+                      audio.resume();
+                  }}
+                  className="bg-white text-black hover:bg-gray-200 border-b-4 border-gray-400 font-bold py-3 px-8 rounded-lg pixel-font"
+                >
+                  继续游戏
+             </button>
+             <p className="text-white/50 text-xs mt-4">或按 ESC 键继续</p>
           </div>
         )}
 
