@@ -2,7 +2,15 @@
 
 > 一款基于 React 和 HTML5 Canvas 纯原生开发的现代 2D 横版平台动作游戏，带你重温经典红白机时代的感动。
 
-![小熊大冒险](https://images.unsplash.com/photo-1542204165-65bf26472b9b?q=80&w=2574&auto=format&fit=crop)
+![小熊大冒险 - 游戏主界面](https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2574&auto=format&fit=crop)
+
+## 🏷️ GitHub 推荐标签 (Repository Topics)
+
+给你的 GitHub 仓库添加以下 **Topics (标签)**，可以显著提升项目在同类开源作品中的被发现率和搜索曝光度：
+
+`react` `canvas` `platformer` `2d-game` `typescript` `game-engine` `retro-gaming` `html5-game` `indie-game` `web-game`
+
+---
 
 ## 🌟 游戏简介 (Introduction)
 
