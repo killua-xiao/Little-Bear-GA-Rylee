@@ -18,8 +18,9 @@
 
 ### 2.1 游戏主循环 (Main Game Loop)
 位于 `components/GameCanvas.tsx`，核心方法为 `update()`（物理逻辑）与 `draw()`（视觉渲染）。
-- **帧率解耦**：物理相关的运算虽然绑定在 `rAF` 之下，但利用了 `hitStopRef` 来实现受击时的 "顿帧" 冲击效果（Hitstop），赋予了打击感。
-- **独立时间步长**：通过 `timeRef` 管理系统运行的刻度，用于处理子弹冷却、粒子生命周期衰减、云朵视差滚动等。
+- **固定时间步 (Fixed Timestep)**：`engine/fixedTimestep.ts` 将物理/输入锁定在 60Hz。显示刷新率更高时只插值相机，更低时追帧，避免手感随帧率漂移。
+- **顿帧冲击**：利用 `hitStopRef` 实现受击 Hitstop，赋予打击感。
+- **逻辑时钟**：`timeRef` 以固定步推进，用于冷却、粒子生命周期、视差滚动等。
 
 ### 2.2 ECS (Entity-Component-System) 微架构思想
 虽然代码结构未使用纯粹的 ECS，但借鉴了其设计模式，所有对象均定义在 `types.ts`。
@@ -68,12 +69,28 @@
 
 ---
 
+
+### 3.7 画质档位与廉价后处理 (Graphics Quality)
+
+`constants.ts` 中的 `GRAPHICS` / `GRAPHICS_QUALITY`（LOW / MEDIUM / HIGH）统一开关：
+- 光照刷新间隔、雨孢子密度、太阳光柱
+- 软辉光、平台细节、氛围染色、暗角、残影数量
+
+昂贵效果策略：
+- **禁止**热路径上的 `shadowBlur`（改用 `drawSoftGlow` 径向叠加辉光）
+- 暗角 / 氛围色一次烘焙到离屏 Canvas，每帧 `drawImage`
+- 平台高光/草叶仅在 MEDIUM+ 启用
+
+详见 `engine/visualFx.ts`。
+
 ## 4. 目录结构指南 (Directory Structure)
 
 ```text
 /
 ├── engine/              # 【新增】可复用引擎模块
 │   ├── collision.ts     # AABB + 扫掠检测 + SpatialGrid
+│   ├── fixedTimestep.ts # 60Hz 固定时间步
+│   ├── visualFx.ts      # 烘焙暗角/氛围、软辉光、平台细节
 │   ├── input.ts         # 统一输入 helpers
 │   ├── spawner.ts       # 刷怪笼存活上限
 │   ├── renderHelpers.ts # Canvas 适配与 HUD 绘制

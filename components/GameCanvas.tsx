@@ -7,7 +7,7 @@ import {
   ACCELERATION, FRICTION, AIR_FRICTION, COYOTE_TIME, JUMP_BUFFER,
   SWIM_SPEED, WATER_FRICTION, MELEE_RANGE, MELEE_DURATION, MELEE_COOLDOWN, VISUALS,
   MAX_SPAWNED_ENEMIES, STATS_SYNC_INTERVAL, ENTITY_CLEANUP_INTERVAL, SPATIAL_GRID_CELL_SIZE,
-  LIGHTING_UPDATE_INTERVAL, MAX_RAIN_SPORE_PER_FRAME, SUN_RAYS_ENABLED,
+  LIGHTING_UPDATE_INTERVAL, MAX_RAIN_SPORE_PER_FRAME, SUN_RAYS_ENABLED, GRAPHICS,
 } from '../constants';
 import { Entity, Player, EntityType, GameStatus, GameState } from '../types';
 import { levels } from '../levels';
@@ -21,6 +21,8 @@ import {
   canSpawnerSpawn,
   pollGamepadState, isMoveLeft, isMoveRight, isMoveUp, isMoveDown, isJumpHeld, isFireHeld,
   prepareCanvas2D, drawCheckpointOverlay,
+  FixedTimestep,
+  bakeVignette, bakeAtmosphereTint, drawSoftGlow, drawContactShadow, drawDetailedPlatform, atmosphereTintForWeather,
   CameraState, Cloud, Tree, Planet, CaveSpike, SunRay, Trail,
 } from '../engine';
 
@@ -81,6 +83,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
   const treesRightMostRef = useRef(CANVAS_WIDTH);
   const gamepadStateRef = useRef(pollGamepadState(null));
   const lightingFrameRef = useRef(0);
+  const vignetteCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const atmosphereCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fixedStepRef = useRef(new FixedTimestep());
+
 
   const spawnParticle = (opts: Parameters<ParticlePool['spawn']>[0]) => particlePoolRef.current.spawn(opts);
   const deactivateParticle = (particle: Parameters<ParticlePool['deactivate']>[0]) => particlePoolRef.current.deactivate(particle);
@@ -191,21 +197,28 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     
     if (isSpaceLevel || weather === 'CAVE') {
         bgGradient.addColorStop(0, '#000000');
-        bgGradient.addColorStop(1, '#111827');
+        bgGradient.addColorStop(0.55, '#0B1020');
+        bgGradient.addColorStop(1, '#1E293B');
     } else if (isSeaLevel) {
-        bgGradient.addColorStop(0, '#0C4A6E'); 
-        bgGradient.addColorStop(1, '#0284C7'); 
+        bgGradient.addColorStop(0, '#082F49');
+        bgGradient.addColorStop(0.45, '#0C4A6E');
+        bgGradient.addColorStop(0.75, '#0369A1');
+        bgGradient.addColorStop(1, '#38BDF8');
     } else if (weather === 'SUNNY' || isTrainLevel) { 
-        // Train level uses Sunny sky
-        bgGradient.addColorStop(0, '#38BDF8'); 
-        bgGradient.addColorStop(1, '#BAE6FD'); 
+        // Richer sky: zenith → horizon warmth (baked once)
+        bgGradient.addColorStop(0, '#0EA5E9');
+        bgGradient.addColorStop(0.45, '#38BDF8');
+        bgGradient.addColorStop(0.78, '#7DD3FC');
+        bgGradient.addColorStop(1, '#FDE68A');
     } else if (weather === 'RAIN') {
-        bgGradient.addColorStop(0, '#334155'); 
-        bgGradient.addColorStop(1, '#475569');
+        bgGradient.addColorStop(0, '#1E293B');
+        bgGradient.addColorStop(0.55, '#334155');
+        bgGradient.addColorStop(1, '#64748B');
     } else if (isArcticLevel) {
-        bgGradient.addColorStop(0, '#0F172A'); 
-        bgGradient.addColorStop(0.5, '#1E3A8A'); 
-        bgGradient.addColorStop(1, '#60A5FA'); 
+        bgGradient.addColorStop(0, '#020617');
+        bgGradient.addColorStop(0.35, '#1E3A8A');
+        bgGradient.addColorStop(0.7, '#3B82F6');
+        bgGradient.addColorStop(1, '#BAE6FD');
     } else {
         bgGradient.addColorStop(0, levelRef.current.backgroundColor);
         bgGradient.addColorStop(1, levelRef.current.backgroundColor);
@@ -231,6 +244,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     lighting.width = CANVAS_WIDTH;
     lighting.height = CANVAS_HEIGHT;
     lightingCanvasRef.current = lighting;
+
+    // Pre-bake post-FX overlays (once per level) — avoids per-frame radial gradients
+    if (GRAPHICS.vignetteEnabled) {
+      vignetteCanvasRef.current = bakeVignette(CANVAS_WIDTH, CANVAS_HEIGHT, VISUALS.vignetteStrength);
+    } else {
+      vignetteCanvasRef.current = null;
+    }
+    const weatherTint = atmosphereTintForWeather(levelRef.current.weather);
+    if (GRAPHICS.atmosphereTintEnabled && weatherTint) {
+      atmosphereCanvasRef.current = bakeAtmosphereTint(CANVAS_WIDTH, CANVAS_HEIGHT, weatherTint);
+    } else {
+      atmosphereCanvasRef.current = null;
+    }
+    fixedStepRef.current.reset();
+
   }, [levelId]); 
 
   // --- 关卡切换逻辑 ---
@@ -588,6 +616,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
                 alpha: 0.5,
                 type: 'BEAR'
             });
+            if (trailsRef.current.length > GRAPHICS.maxMotionTrails) {
+              trailsRef.current.splice(0, trailsRef.current.length - GRAPHICS.maxMotionTrails);
+            }
         }
     }
 
@@ -1200,14 +1231,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     );
 
     // === 3. 绘制阴影 (Shadows Pass) ===
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
     visibleEntities.forEach(ent => {
         if (ent.isDead) return;
-
         if (ent.type === EntityType.PLAYER || ent.type === EntityType.ENEMY || ent.type === EntityType.TROPHY || ent.type === EntityType.CHECKPOINT) {
-             ctx.beginPath();
-             ctx.ellipse(ent.pos.x + ent.size.x/2, ent.pos.y + ent.size.y - 2, ent.size.x/2, 4, 0, 0, Math.PI*2);
-             ctx.fill();
+             drawContactShadow(
+               ctx,
+               ent.pos.x + ent.size.x / 2,
+               ent.pos.y + ent.size.y - 2,
+               ent.size.x,
+               GRAPHICS.contactShadowAlpha,
+             );
         }
     });
 
@@ -1269,14 +1302,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
                  const earthX = ent.pos.x + 200; 
                  const earthY = CANVAS_HEIGHT/2; 
                  const radius = 300;
-                 ctx.shadowBlur = 50; 
-                 ctx.shadowColor = '#60A5FA'; 
+                 /* glow via soft ring instead of shadowBlur */
+                 if (GRAPHICS.softGlowEnabled) { drawSoftGlow(ctx, earthX, earthY, radius * 0.55, '#60A5FA', 0.35); } 
                  ctx.fillStyle = '#1E3A8A'; ctx.beginPath(); ctx.arc(earthX, earthY, radius, 0, Math.PI*2); ctx.fill();
                  ctx.fillStyle = '#F8FAFC'; ctx.beginPath(); ctx.ellipse(earthX, earthY - 200, 220, 80, 0, 0, Math.PI*2); ctx.fill();
                  ctx.fillStyle = '#15803D'; ctx.beginPath(); ctx.arc(earthX - 100, earthY + 50, 60, 0, Math.PI*2); ctx.fill(); 
                  ctx.beginPath(); ctx.arc(earthX + 150, earthY + 100, 80, 0, Math.PI*2); ctx.fill();
                  ctx.lineWidth = 5; ctx.strokeStyle = '#93C5FD'; ctx.beginPath(); ctx.arc(earthX, earthY, radius, 0, Math.PI*2); ctx.stroke(); 
-                 ctx.shadowBlur = 0;
+                 
                  return;
              }
              ctx.fillStyle = '#111827'; ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
@@ -1304,37 +1337,27 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
             for(let i = 10; i < ent.size.x - 30; i += 50) {
                 ctx.fillRect(ent.pos.x + i, ent.pos.y + 10, 30, 15);
             }
+        } else if (GRAPHICS.platformDetailEnabled) {
+            const bodyColor = levelRef.current.groundColor || COLORS.groundDark;
+            const topColor = levelRef.current.groundColor
+              ? (levelRef.current.groundColor === COLORS.ice ? '#D6F2FE' : '#65A30D')
+              : COLORS.groundTop;
+            const drawGrass = !levelRef.current.groundColor || levelRef.current.groundColor === COLORS.ground;
+            drawDetailedPlatform(ctx, ent.pos.x, ent.pos.y, ent.size.x, ent.size.y, {
+              bodyColor,
+              topColor: !levelRef.current.groundColor ? COLORS.groundTop : topColor,
+              drawGrass,
+              grassColor: COLORS.groundTop,
+            });
         } else {
-            // PROCEDURAL TERRAIN RENDERING
-            // Base
             ctx.fillStyle = levelRef.current.groundColor || COLORS.groundDark;
             ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, ent.size.y);
-            
-            // Stone/Dirt Texture (Noise)
-            ctx.fillStyle = 'rgba(0,0,0,0.1)';
-            const seed = ent.pos.x; // Deterministic random based on position
-            for(let i = 0; i < ent.size.x; i+= 15) {
-                for(let j=10; j < ent.size.y; j+= 15) {
-                     if (((seed + i * j) % 7) > 3) {
-                         ctx.fillRect(ent.pos.x + i, ent.pos.y + j, 6, 6);
-                     }
-                }
-            }
-
-            // Top Layer (Grass/Ice)
             if (ent.size.y > 10) {
-               const topColor = levelRef.current.groundColor ? (levelRef.current.groundColor === COLORS.ice ? '#D6F2FE' : '#65A30D') : COLORS.dirt;
-               ctx.fillStyle = !levelRef.current.groundColor ? COLORS.groundTop : topColor;
-               ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, 10);
-
-               // Procedural Grass Blades
-               if (!levelRef.current.groundColor || levelRef.current.groundColor === COLORS.ground) {
-                   ctx.fillStyle = COLORS.groundTop;
-                   for(let g = 0; g < ent.size.x; g += 8) {
-                       const h = 4 + ((g + ent.pos.x) % 5); 
-                       ctx.fillRect(ent.pos.x + g, ent.pos.y - h, 4, h);
-                   }
-               }
+              const topColor = levelRef.current.groundColor
+                ? (levelRef.current.groundColor === COLORS.ice ? '#D6F2FE' : '#65A30D')
+                : COLORS.groundTop;
+              ctx.fillStyle = !levelRef.current.groundColor ? COLORS.groundTop : topColor;
+              ctx.fillRect(ent.pos.x, ent.pos.y, ent.size.x, 10);
             }
         }
       } 
@@ -1349,17 +1372,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
           ctx.stroke();
       }
       else if (ent.type === EntityType.COIN) {
-        ctx.shadowBlur = 10; ctx.shadowColor = COLORS.coinShine;
+        if (GRAPHICS.softGlowEnabled) {
+          drawSoftGlow(ctx, ent.pos.x + ent.size.x/2, ent.pos.y + ent.size.y/2, ent.size.x * 1.6, COLORS.coinShine, 0.45);
+        }
         ctx.fillStyle = COLORS.coin; ctx.beginPath(); ctx.arc(ent.pos.x + ent.size.x/2, ent.pos.y + ent.size.y/2, ent.size.x/2, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.beginPath(); ctx.arc(ent.pos.x + ent.size.x/2 - 2, ent.pos.y + ent.size.y/2 - 2, Math.max(1.5, ent.size.x/6), 0, Math.PI * 2); ctx.fill();
       }
       else if (ent.type === EntityType.CHECKPOINT) {
           ctx.fillStyle = '#9CA3AF'; ctx.fillRect(ent.pos.x + 5, ent.pos.y, 4, 40);
+          if (ent.isChecked && GRAPHICS.softGlowEnabled) {
+            drawSoftGlow(ctx, ent.pos.x + 18, ent.pos.y + 12, 28, '#34D399', 0.4);
+          }
           ctx.fillStyle = ent.isChecked ? '#10B981' : '#EF4444'; 
-          ctx.shadowBlur = ent.isChecked ? 15 : 0; ctx.shadowColor = ent.isChecked ? '#10B981' : 'transparent';
           ctx.beginPath(); ctx.moveTo(ent.pos.x + 9, ent.pos.y + 2); ctx.lineTo(ent.pos.x + 35, ent.pos.y + 10); ctx.lineTo(ent.pos.x + 9, ent.pos.y + 18); ctx.fill();
           if (ent.isChecked) { ctx.strokeStyle = '#FFF'; ctx.lineWidth = 2; ctx.stroke(); }
-          ctx.shadowBlur = 0;
       }
       else if (ent.type === EntityType.WINE) {
         ctx.fillStyle = COLORS.wine; ctx.fillRect(ent.pos.x + 4, ent.pos.y + 10, 12, 20); ctx.fillRect(ent.pos.x + 7, ent.pos.y, 6, 10);
@@ -1387,10 +1414,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
          } else {
              ctx.fillStyle = '#5D4037'; ctx.fillRect(ent.pos.x, ent.pos.y + 30, 40, 10);
              ctx.fillStyle = '#8D6E63'; ctx.fillRect(ent.pos.x - 5, ent.pos.y + 25, 50, 5);
-             ctx.shadowBlur = 15; ctx.shadowColor = '#FDE047';
+             if (GRAPHICS.softGlowEnabled) {
+               drawSoftGlow(ctx, ent.pos.x + 20, ent.pos.y + 15, 32, '#FDE047', 0.4);
+             }
              ctx.fillStyle = COLORS.trophy; ctx.beginPath(); ctx.moveTo(ent.pos.x + 5, ent.pos.y + 5); ctx.lineTo(ent.pos.x + 35, ent.pos.y + 5); ctx.bezierCurveTo(ent.pos.x + 35, ent.pos.y + 25, ent.pos.x + 5, ent.pos.y + 25, ent.pos.x + 5, ent.pos.y + 5); ctx.fill();
              ctx.fillStyle = COLORS.trophyBase; ctx.fillRect(ent.pos.x + 15, ent.pos.y + 25, 10, 5); ctx.fillRect(ent.pos.x + 10, ent.pos.y + 30, 20, 5);
-             ctx.shadowBlur = 0;
          }
       }
       else if (ent.type === EntityType.ENEMY) {
@@ -1506,8 +1534,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
 
     // Draw Bullets
     bullets.forEach(b => {
-        // Glow for projectiles
-        ctx.shadowBlur = 15; ctx.shadowColor = '#F43F5E';
+        if (GRAPHICS.softGlowEnabled) {
+          drawSoftGlow(ctx, b.pos.x + b.size.x/2, b.pos.y + b.size.y/2, 18, '#FB7185', 0.35);
+        }
         if (isLevel5) { 
             ctx.save(); ctx.translate(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2); ctx.rotate((timeRef.current / 50) % (Math.PI * 2));
             ctx.fillStyle = COLORS.shovelHandle; ctx.fillRect(-5, -2, 10, 4); ctx.fillStyle = COLORS.shovel; ctx.fillRect(5, -6, 12, 12); ctx.restore();
@@ -1527,7 +1556,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
         } else { 
             ctx.fillStyle = COLORS.projectile; ctx.beginPath(); ctx.arc(b.pos.x + b.size.x/2, b.pos.y + b.size.y/2, b.size.x/2, 0, Math.PI * 2); ctx.fill();
         }
-        ctx.shadowBlur = 0;
     });
 
     // 5. 绘制玩家 (Player)
@@ -1695,23 +1723,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
         ctx.drawImage(lightingCanvasRef.current, 0, 0);
     }
 
-    // === Post-Processing: Vignette & Chromatic Aberration ===
-    
-    // Vignette
-    const vignette = ctx.createRadialGradient(CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_HEIGHT/3, CANVAS_WIDTH/2, CANVAS_HEIGHT/2, CANVAS_HEIGHT * 0.8);
-    vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(1, `rgba(0,0,0,${VISUALS.vignetteStrength})`);
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-    // Chromatic Aberration (Fake RGB split on edges)
-    // We only simulate this by drawing the canvas over itself with slight offsets and color blending if we had more layers, 
-    // but a simpler way in 2D context without heavy perf hit is harder. 
-    // Instead, let's just do a color tint overlay for atmosphere.
-    if (weather === 'CAVE') {
-        ctx.fillStyle = 'rgba(0, 0, 20, 0.1)'; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    } else if (weather === 'SUNNY') {
-        ctx.fillStyle = 'rgba(255, 255, 200, 0.05)'; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        // === Post-Processing: baked atmosphere + vignette (no per-frame gradients) ===
+    if (atmosphereCanvasRef.current) {
+        ctx.drawImage(atmosphereCanvasRef.current, 0, 0);
+    }
+    if (vignetteCanvasRef.current) {
+        ctx.drawImage(vignetteCanvasRef.current, 0, 0);
     }
 
 
@@ -1763,9 +1780,18 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
     ctx.restore();
   };
 
-  const loop = () => {
+    const loop = (now: number = performance.now()) => {
     if (gameStatusRef.current === GameStatus.PLAYING) {
-      update();
+      // Input is already edge-triggered via key/gamepad refs; physics stays locked to 60Hz.
+      const steps = fixedStepRef.current.tick(now);
+      for (let i = 0; i < steps; i++) {
+        update();
+      }
+      // On high-refresh displays, keep camera/decay silky between physics steps.
+      if (steps === 0 && gameStatusRef.current === GameStatus.PLAYING) {
+        updateCameraDecay(cameraRef.current);
+        updateCameraFollow(cameraRef.current, playerRef.current, levelRef.current.width);
+      }
       draw();
       requestRef.current = requestAnimationFrame(loop);
     }
@@ -1774,6 +1800,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ levelId, gameState, setG
   useEffect(() => {
     gameStatusRef.current = gameState.status;
     if (gameState.status === GameStatus.PLAYING) {
+      fixedStepRef.current.reset();
       requestRef.current = requestAnimationFrame(loop);
     }
     return () => {

@@ -53,35 +53,76 @@ export const DEFAULT_SPAWNER_MAX_ALIVE = 3;
 export const METEOR_SPAWNER_MAX_ALIVE = 2;
 
 // --- 画质档位 (LOW / MEDIUM / HIGH) ---
+// HIGH 优先观感；昂贵效果用离屏烘焙 / 廉价辉光，避免拖累输入响应
 export type GraphicsQuality = 'LOW' | 'MEDIUM' | 'HIGH';
 
-const GRAPHICS_BY_QUALITY: Record<
-  GraphicsQuality,
-  { lightingUpdateInterval: number; maxRainSporePerFrame: number; sunRaysEnabled: boolean }
-> = {
-  LOW: { lightingUpdateInterval: 3, maxRainSporePerFrame: 1, sunRaysEnabled: false },
-  MEDIUM: { lightingUpdateInterval: 2, maxRainSporePerFrame: 2, sunRaysEnabled: true },
-  HIGH: { lightingUpdateInterval: 1, maxRainSporePerFrame: 3, sunRaysEnabled: true },
+export interface GraphicsProfile {
+  lightingUpdateInterval: number;
+  maxRainSporePerFrame: number;
+  sunRaysEnabled: boolean;
+  softGlowEnabled: boolean;
+  platformDetailEnabled: boolean;
+  atmosphereTintEnabled: boolean;
+  vignetteEnabled: boolean;
+  maxMotionTrails: number;
+  contactShadowAlpha: number;
+}
+
+const GRAPHICS_BY_QUALITY: Record<GraphicsQuality, GraphicsProfile> = {
+  LOW: {
+    lightingUpdateInterval: 3,
+    maxRainSporePerFrame: 1,
+    sunRaysEnabled: false,
+    softGlowEnabled: false,
+    platformDetailEnabled: false,
+    atmosphereTintEnabled: false,
+    vignetteEnabled: false,
+    maxMotionTrails: 4,
+    contactShadowAlpha: 0.15,
+  },
+  MEDIUM: {
+    lightingUpdateInterval: 2,
+    maxRainSporePerFrame: 2,
+    sunRaysEnabled: true,
+    softGlowEnabled: true,
+    platformDetailEnabled: true,
+    atmosphereTintEnabled: true,
+    vignetteEnabled: true,
+    maxMotionTrails: 8,
+    contactShadowAlpha: 0.22,
+  },
+  HIGH: {
+    lightingUpdateInterval: 1,
+    maxRainSporePerFrame: 3,
+    sunRaysEnabled: true,
+    softGlowEnabled: true,
+    platformDetailEnabled: true,
+    atmosphereTintEnabled: true,
+    vignetteEnabled: true,
+    maxMotionTrails: 12,
+    contactShadowAlpha: 0.3,
+  },
 };
 
 export const GRAPHICS_QUALITY: GraphicsQuality = 'HIGH';
-const activeGraphics = GRAPHICS_BY_QUALITY[GRAPHICS_QUALITY];
-export const LIGHTING_UPDATE_INTERVAL = activeGraphics.lightingUpdateInterval;
-export const MAX_RAIN_SPORE_PER_FRAME = activeGraphics.maxRainSporePerFrame;
-export const SUN_RAYS_ENABLED = activeGraphics.sunRaysEnabled;
+export const GRAPHICS = GRAPHICS_BY_QUALITY[GRAPHICS_QUALITY];
+export const LIGHTING_UPDATE_INTERVAL = GRAPHICS.lightingUpdateInterval;
+export const MAX_RAIN_SPORE_PER_FRAME = GRAPHICS.maxRainSporePerFrame;
+export const SUN_RAYS_ENABLED = GRAPHICS.sunRaysEnabled;
 
 // --- 引擎性能参数 ---
 export const MAX_SPAWNED_ENEMIES = 30;   // 同屏刷怪上限
 export const STATS_SYNC_INTERVAL = 10;   // 分数/金币同步到 React 的帧间隔
 export const ENTITY_CLEANUP_INTERVAL = 300; // 清理死亡实体的帧间隔
 export const SPATIAL_GRID_CELL_SIZE = TILE_SIZE; // 空间网格单元大小
+export const FIXED_TIMESTEP_HZ = 60;     // 物理/输入固定步频，与刷新率解耦
 
 // --- 视觉特效配置 ---
 export const VISUALS = {
-    sunRayCount: 5,
-    sunRayColor: 'rgba(255, 255, 200, 0.08)',
-    vignetteStrength: 0.3,
-    chromaticAberration: 2, // 像素偏移量
+    sunRayCount: GRAPHICS.sunRaysEnabled ? (GRAPHICS_QUALITY === 'HIGH' ? 7 : 5) : 0,
+    sunRayColor: 'rgba(255, 250, 200, 0.10)',
+    vignetteStrength: GRAPHICS_QUALITY === 'HIGH' ? 0.38 : 0.28,
+    chromaticAberration: 2,
 };
 
 // --- 颜色配置表 (Palette - Updated for Realism) ---

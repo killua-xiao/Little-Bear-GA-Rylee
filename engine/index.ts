@@ -9,3 +9,5 @@ export * from './input';
 export * from './spawner';
 export * from './renderHelpers';
 export * from './levelValidation';
+export * from './visualFx';
+export * from './fixedTimestep';
